@@ -493,6 +493,7 @@ sub getOption{
             if("encoding"         eq $para && "" eq $ENCODING          ){$ENCODING             = $val;}
         }
     }
+    $DIRECTORY =~ s/\/*\s*$//;
 }
 sub checkOption{
     if("" eq $DATABASE_NAME){
@@ -635,8 +636,7 @@ sub getTableFromFile{
 sub restoreDdl(){
     if(!$DATA_ONLY){
         logMessage("INFO","Restore DDLs and OBJECTs and AUTHORIZATIONs");
-        system("psql -f $MASTER_BACKUP_PATH"."$LAST_BACKUP_TIME/$BACKUP_DB.global.txt $DATABASE_NAME >/dev/null 2>&1");
-        system("psql -f $MASTER_BACKUP_PATH"."$LAST_BACKUP_TIME/$BACKUP_DB.ddl.txt $DATABASE_NAME >/dev/null 2>&1");
+        system("gpddlrestore --database $DATABASE_NAME --port $PORT --object-bit FFFF -f $MASTER_BACKUP_PATH"."$LAST_BACKUP_TIME/$BACKUP_DB.ddl.txt >/dev/null 2>&1");
     }
 }
 sub processTableArray{

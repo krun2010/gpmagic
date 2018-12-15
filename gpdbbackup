@@ -634,6 +634,7 @@ sub getOption{
             if("fast    "     eq $para && "" eq $FAST             ){$FAST                  = 1   ;}
         }
     }
+    $DIRECTORY =~ s/\/*\s*$//;
 }
 sub checkOption{
     if("" eq $DATABASE_NAME){
@@ -1284,13 +1285,7 @@ sub executeMessage{
 sub startBackup{
     if(!$DATA_ONLY){
         logMessage("INFO","Backup DDLs and OBJECTs and AUTHORIZATIONs");
-        my $dumpall_para = trim(readpipe(qq{pg_dumpall --help|grep -w 'resource-queues'|wc -l}));
-        if($dumpall_para eq "1"){
-            system("pg_dumpall -g --resource-queues -f $MASTER_LOG_PATH/$DATABASE_NAME.global.txt");
-        }else{
-            system("pg_dumpall -g -r -f $MASTER_LOG_PATH/$DATABASE_NAME.global.txt");
-        }
-        system("pg_dump -s -f $MASTER_LOG_PATH/$DATABASE_NAME.ddl.txt $DATABASE_NAME");
+        system("gpddlbackup --database $DATABASE_NAME --port $PORT -f $MASTER_LOG_PATH/$DATABASE_NAME.ddl.txt");
     }
     my $tables_size = @TABLE_ARRAY;
     if(0 == $tables_size){
