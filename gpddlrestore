@@ -6,17 +6,18 @@ use Thread::Queue;
 use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
 use Fcntl qw(:flock);
 use POSIX;
+use Time::HiRes qw(usleep nanosleep);
 
 my ($DATABASE_NAME,$PORT,$FROM_FILE,$OBJECT_BIT,$BATCH_SIZE,$IS_HELP,$VERSION);
 my %BATCH_REGION_HASH = ("Language" => "","Schema" => "","Type" => "","Function" => "","Sequence" => "","Table" => "","ExtTable" => "","View" => "","Index" => "","Comment" => "");
 my $REGION_TYPE;
 my %OBJECT_BIT_HASH = ("ResourceQueue" => 8192,"Role" => 4096,"TableSpace" => 2048,"RoleSetting" => 1024,"Language" => 512, "Schema" => 256, "Type" => 128, "Function" => 64,
     "Sequence" => 32,"Table" => 16,"ExtTable" => 8,"View" => 4,"Index" => 2,"Comment" => 1);
-
+my ($LOCK_FILE_HANDLE);
 my ($FILE_HANDLE,$TASK_QUEUE,$MSGE_QUEUE);
 my (@TASK_THREAD,$MSGE_THREAD);
-my ($BATCH_MAX,$BATCH_DEFAULT,$BATCH_MIN,$CURR_BATCH_SIZE) = (128,32,1);
-my ($MINI_BATCH) = (30000);
+my ($BATCH_MAX,$BATCH_DEFAULT,$BATCH_MIN,$CURR_BATCH_SIZE) = (128,32,8);
+my ($MINI_BATCH) = (32 << 10);
 
 my ($SQL_SPLIT,$CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = ('chr(1)||chr(2)||chr(7)',chr(1).chr(2).chr(7),chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
 my $REGION_START  = qq#--------REGION--------START--------#.$CMD_SPLIT.$CMD_SPLIT;
@@ -133,27 +134,22 @@ sub trim{
 sub output{
     print trim($_[0])."\n";
 }
-sub queryResult{
-    my ($query_sql,$return_flag) = @_;
+sub exequteQuery{
+    my ($query_sql,$thread_index) = @_;
+    my $script_file = "/tmp/.gpdbrestore.script.".$thread_index;
+    if(!open(FILE_HANDLE,">",$script_file)){
+        errorMessage("Can't open temp file: $script_file");
+    }
+    print FILE_HANDLE "set client_encoding to utf8;\n".$query_sql;
+    close FILE_HANDLE;
     my $CMDS = "set -o pipefail;PGDATABASE=$DATABASE_NAME PGPORT=$PORT ";
     local $/ = $RECORD_SPLIT;
-    $CMDS = $CMDS."psql -R '$/' -tAXF '$SQL_DELIM' 2>&1 <<'END_OF_SQL'|sed '/^SET\$/d'\n";
-    $CMDS = $CMDS."set client_encoding to utf8;\n";
-    $CMDS = $CMDS.$query_sql."\n";
-    $CMDS = $CMDS."END_OF_SQL\n";
+    $CMDS = $CMDS."psql -R '$/' -tAXF '$SQL_DELIM' 2>&1 -f $script_file |sed -e '/^SET\$/d' -e 's/psql.*gpdbrestore.script.[0-9]*:[0-9]*: //'";
     my @result = readpipe($CMDS);
     my $return_code = $? >> 8;
     chomp(@result);
     local $/ = chr(10);
-    chomp($result[-1]) if (@result > 0);
-    return ($return_code,join("\n",@result)) if ("CV" eq $return_flag);
-    errorMessage(join("\n",@result)) if ($return_code);
-    return join("\n",@result) if ("Scalar" eq $return_flag);
-    my @return_list = ();
-    for my $row(@result){
-        push @return_list,[split(/$SQL_DELIM/,$row)];
-    }
-    return @return_list;
+    return join("\n",@result);
 }
 sub getOption{
     GetOptions(
@@ -202,13 +198,25 @@ sub checkOption{
         $OBJECT_BIT = hex("FFFF");
     }
 }
+sub checkConflictProcess{
+    my $lock_file = "/tmp/.gpddlrestore.lock";
+    if(!open($LOCK_FILE_HANDLE,">",$lock_file)){
+        errorMessage("Can't open lock file: $lock_file");
+    }
+    my $lockCode = flock($LOCK_FILE_HANDLE, LOCK_EX | LOCK_NB);
+    if(!$lockCode){
+        errorMessage("Lock file is in using, you can try again later");
+    }
+}
 sub executeRestore{
     $SIG{'KILL'} = sub{threads->exit;};
+    my ($index) = @_;
     my $end = 0;
     while(1){
         my ($task_batch,$task,$size) = ("","",0);
         while(1){
             $task = $TASK_QUEUE->dequeue();
+            nanosleep(10000);
             if("" eq $task){
                 $end = 1;
                 last;
@@ -221,7 +229,7 @@ sub executeRestore{
             }
         }
         if("" ne $task_batch){
-            my($code,$msg) = queryResult($task_batch,"CV");
+            my $msg = exequteQuery($task_batch,$index);
             $MSGE_QUEUE->enqueue($msg);
         }
         if($end){
@@ -264,7 +272,7 @@ sub restoreRegion{
     @TASK_THREAD = ();
     for my $index(0 .. $CURR_BATCH_SIZE - 1){
         $TASK_QUEUE->enqueue(undef);
-        my $task_thread = threads->new(\&executeRestore);
+        my $task_thread = threads->new(\&executeRestore,$index);
         push @TASK_THREAD,$task_thread;
     }
     $MSGE_THREAD = threads->new(\&executeMessage,$CURR_BATCH_SIZE);
@@ -304,10 +312,20 @@ sub restoreFromFile{
     close $FILE_HANDLE;
     return @line_list;
 }
+sub clearTempFile{
+    my $lock_file = "/tmp/.gpddlrestore.lock";
+    if($LOCK_FILE_HANDLE){
+        close $LOCK_FILE_HANDLE;
+    }
+    unlink $lock_file;
+    system(qq{rm -f /tmp/.gpdbrestore.script.*});
+}
 sub main{
     getOption();
     checkOption();
+    checkConflictProcess();
     restoreFromFile();
+    clearTempFile();
 }
 my $command_string = $0." ".join(" ",@ARGV);
 $| = 1;
