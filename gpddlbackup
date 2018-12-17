@@ -272,7 +272,7 @@ sub getOption{
         exitMain(0);
     }
     if($VERSION){
-        print "$CMD_NAME 0.1\n";
+        print "$CMD_NAME 1.0\n";
         exitMain(0);
     }
 }
