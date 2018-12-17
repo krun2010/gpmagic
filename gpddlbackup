@@ -700,21 +700,21 @@ sub outputSequence{
     my %temp_hash;
     my ($index,$all_index) = (0,0);
     my $sequece_size = @result;
-    my $query_sql = "";
+    my @query_array = ();
     for my $row(@result){
         my ($oid,$relnamespace,$relowner,$relname,$relacl) = @$row;
         ($relname,$relacl,$relnamespace,$relowner) = (quote(decode($relname)),decode($relacl),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
         $result[$all_index] = [($oid,$relnamespace,$relowner,$relname,$relacl)];
         ($index,$all_index) = ($index + 1,$all_index + 1);
         if(!isTempSchema($relnamespace)){
-            $query_sql = $query_sql.qq{SELECT $oid,increment_by,min_value,max_value,last_value,cache_value,is_cycled FROM $relnamespace.$relname;\n};
+            push @query_array,qq{SELECT $oid,increment_by,min_value,max_value,last_value,cache_value,is_cycled FROM $relnamespace.$relname};
         }
         if($index == $SQL_BATCH || $all_index == $sequece_size){
-            for my $row(queryResult($query_sql)){
+            for my $row(queryResult(join("\nUNION ALL\n",@query_array))){
                 my ($sid,$increment_by,$min_value,$max_value,$last_value,$cache_value,$is_cycled) = @$row;
                 $temp_hash{$sid} = [($increment_by,$min_value,$max_value,$last_value,$cache_value,$is_cycled)];
             }
-            $query_sql = "";
+            @query_array = ();
             $index = 0;
         }
     }

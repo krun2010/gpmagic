@@ -1222,7 +1222,7 @@ sub executeBackup{
         my ($code,$value) = queryResult($query,"CV");
         my $duration = time() - $start;
         if($code eq 0){
-            my $bytes = (split(/\n/,$value))[2];
+            my $bytes = $value;
             @stat_msg= ("SUCCESS"," SIZE $bytes BYTES TIME $duration S",$scma,$rel,$tim.";".$count);
         }else{
             @stat_msg = ("FAILED"," ".$value,$scma,$rel);
@@ -1285,7 +1285,11 @@ sub executeMessage{
 sub startBackup{
     if(!$DATA_ONLY){
         logMessage("INFO","Backup DDLs and OBJECTs and AUTHORIZATIONs");
-        system("gpddlbackup --database $DATABASE_NAME --port $PORT -f $MASTER_LOG_PATH/$DATABASE_NAME.ddl.txt");
+        my $output = readpipe("gpddlbackup --database $DATABASE_NAME --port $PORT -f $MASTER_LOG_PATH/$DATABASE_NAME.ddl.txt 2>&1");
+        my $return_code = $? >> 8;
+        if($return_code){
+            errorMessage("Backup DDLs occur error:\n".$output);
+        }
     }
     my $tables_size = @TABLE_ARRAY;
     if(0 == $tables_size){

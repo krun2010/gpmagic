@@ -106,12 +106,11 @@ FLNM=${FLNM#*.}
 SCMA=${FLNM%%.*}
 TBNM=${FLNM#*.}
 CNTT=`PGOPTIONS='-c gp_session_role=utility' psql -qtAX -d postgres -p $PORT -c "show gp_contentid"`
-FILE=$DIRC/db_dumps/$TIME/$DBNM^$CNTT^$SCMA.$TBNM.gz
+FILE=$DIRC/db_dumps/$TIME/$DBNM^$CNTT^$SCMA.$TBNM
 if [ "$SELF" == "1" ];then
-FILE=$DIRC/gpseg$CNTT/db_dumps/$TIME/$DBNM^$CNTT^$SCMA.$TBNM.gz
+FILE=$DIRC/gpseg$CNTT/db_dumps/$TIME/$DBNM^$CNTT^$SCMA.$TBNM
 fi
-set -o pipefail
-cat $FILE|gunzip
+cat $FILE
 ERR=$?
 if [ $ERR -ne 0 ];then
 exit $ERR
@@ -636,11 +635,7 @@ sub getTableFromFile{
 sub restoreDdl(){
     if(!$DATA_ONLY){
         logMessage("INFO","Restore DDLs and OBJECTs and AUTHORIZATIONs");
-        my $output = readpipe("gpddlrestore --database $DATABASE_NAME --port $PORT --object-bit FFFF -f $MASTER_BACKUP_PATH"."$LAST_BACKUP_TIME/$BACKUP_DB.ddl.txt >/dev/null 2>&1");
-        my $return_code = $? >> 8;
-        if($return_code){
-            errorMessage("Restore DDLs occur error:\n".$output);
-        }
+        system("gpddlrestore --database $DATABASE_NAME --port $PORT --object-bit FFFF -f $MASTER_BACKUP_PATH"."$LAST_BACKUP_TIME/$BACKUP_DB.ddl.txt >/dev/null 2>&1");
     }
 }
 sub processTableArray{
