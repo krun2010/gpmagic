@@ -1,0 +1,1122 @@
+#!/usr/bin/perl
+use MIME::Base64;
+use File::Basename;
+use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
+use POSIX;
+use strict;
+
+my ($LOG_FILE_HANDLE);
+my $MAIN_PID = substr("000000".$$,-6);
+(my $CMD_NAME = $0) =~ s!.*/(.*)!$1!;
+my $WORK_PATH = "/tmp";
+
+if($ENV{PATH} !~ "/sbin"){
+    $ENV{PATH}=$ENV{PATH}.":/sbin";
+}
+my @NEED_COMMAND = ("ip","zip","unzip","bash","tar","sed","perl","expect","ssh","ifconfig","mkfs.xfs");
+
+my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
+my (@MASTER_CONFIG,@STANDBY_CONFIG,@ALLHOST_CONFIG_ARRAY,@SEG_INSTALL_CONFIG_ARRAY);
+my ($CLUSTER_EXISTS,$INSTALL_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMIN_NAME);
+my ($COMMAND_FILE_NAME) = ($WORK_PATH."/install_command.sh");
+
+my $HELP_MESSAGE = qq#COMMAND NAME: $CMD_NAME
+Auto install and initialize greenplum cluster.
+
+Developed by Miao Chen
+
+Work Email:
+michen\@pivotal.io
+Private Email:
+miaochen\@mail.ustc.edu.cn
+************************************************************************************************
+SYNOPSIS
+************************************************************************************************
+$CMD_NAME --hosts-config <filename>
+    [--password <current user password>]
+    [--gp-admin-name <gp admin user name>]
+    --install-file <greenplum binary file>
+    --gp-version <greenplum version>
+    --mas-dev <device or directory for master>
+    --seg-dev <device or directory for segment> [--seg-dev <device or directory for segment> ...]
+    [--user-id <gp admin user id>]
+    [--segs-per-disk <instance amount on one device or directory>]
+    [--prefix <instance directory name prefix>]
+    [--mas-port <master work port>]
+    [--port-base <primary instance port base>]
+    [--mirror-split <amount of machine which mirror split to>]
+    [--verbose | -v]
+    [--parameter-file | --pf <parameter file>]
+    [-h | --help]
+*****************************************************
+DESCRIPTION
+*****************************************************
+The $CMD_NAME utility is used to auto configure, install and initialize a GP system or cluster.
+
+Command will log message to log file on path /tmp/gpdbinstall_YYYYmmdd.log
+*****************************************************
+OPTIONS
+*****************************************************
+
+--hosts-config <filename>
+
+  A file contains machine configure like:
+  IP address      hostname    role     position
+  192.168.88.10 : mdw001  :  Master  :   0.1
+  192.168.88.11 : mdw002  :  Standby :   0.2
+  192.168.88.80 : sdw001  :  Segment :   1.1
+  192.168.88.81 : sdw002  :  Segment :   1.2
+  192.168.88.82 : sdw003  :  Segment :   1.3
+  192.168.88.83 : sdw004  :  Segment :   2.1
+  192.168.88.84 : sdw005  :  Segment :   2.2
+  192.168.88.85 : sdw006  :  Segment :   2.3
+  192.168.88.86 : sdw007  :  Segment :   3.1
+  192.168.88.87 : sdw008  :  Segment :   3.2
+  192.168.88.88 : sdw009  :  Segment :   3.3
+  192.168.88.89 : sdw010  :  Backup  :   0.0
+
+  One line have 4 attribute and meaning:
+  IP Address      hostname   role        position
+  IP Address means, this machine will used in this cluster.
+  hostname means, this machine will config hostname as this.
+  role means, Master as GP master, Standby as GP standby, Segment as GP segment, any other as spare machine for GP segment.
+  position means, which position this machine owner to, shoud specify float number, the interger part means which mirror loop this host owner to,
+      and the decimal part means the order in the mirror loop.
+
+--password <password>
+
+  Current user's password, you should make sure the password are the same between all the machines.
+  If not specify this parameter, command will prompt to input this password.
+
+--gp-admin-name <user name>
+
+  Use user name as greenplum database's admin user.
+  If install user is root, default user is gpadmin.
+  If install user is not root, default user is current user.
+
+--install-file <greenplum binary file>
+
+  Greenplum database binary install file, should named like:
+  greenplum-db-XX.XX.XX[.XX]-rhel5-x86_64.(zip|bin)
+
+  the XX.XX.XX[.XX] means the version number.
+
+--gp-version <greenplum version>
+
+  Greenplum database version, will search exists installed version on path /usr/local.
+  If specify this parameter, utility will ignore the parameter --gp-version.
+  e.g.:
+  --gp-version 5.10.2
+  or
+  --gp-version 4.3.29.0
+
+--mas-dev <path or device>
+
+  Use this device or directory for master work directory.
+  If this is a path, will use it directly,
+      else if this is a device, command will try to config it, make it as xfs filesystem,
+      but others, command will exit with an error.
+  e.g.:
+  --mas-dev /dev/sdc
+  or:
+  --mas-dev /data
+
+--seg-dev <path or device> [--seg-dev <path or device> ...]
+
+  Use this device or directory for segment work directory.
+  If this is a path, will use it directly,
+      else if this is a device, command will try to config it, make it as xfs filesystem,
+      but others, command will exit with an error.
+  e.g.:
+  --seg-dev /dev/sdc --seg-dev /dev/sde
+  or:
+  --seg-dev /data1 --seg-dev /data2
+
+[--user-id <userid for OS>]
+
+  Use this id for OS user (for gp admin user), if not specify, use 500 for default.
+
+[--segs-per-disk <number>]
+
+  Initlize how many primary instance on one device or path, default is 2
+
+[--prefix <prefix>]
+
+  Instance directory name prefix, defualt is gpseg
+
+[--mas-port <Master work port>]
+
+  Master work port, default is 5432
+
+[--port-base <port base>]
+
+  Primary instance work port base, primary replication port is 1000 bigger than this,
+  Mirror instance work port is 10000 bigger than this, and which replication port is 11000 bigger than this.
+  Default is 40000
+
+[--mirror-split <number>]
+
+  How many machine used to split one machine's mirror instance.
+  If this number + 1 bigger or equal to one mirror loop's machine amount, command will exit with error.
+  If specify this parameter as 0, command will not config mirror for this cluster.
+  Default is 2
+
+[--verbose | -v]
+
+  Command will output verbose message.
+
+[--parameter-file | -- pf <file>]
+
+  Specify the parameter in file.
+  Format:
+  name=value
+  Like:
+  hosts-config  = hosts-config
+  gp-admin-name = gpadmin
+  install-file  = greenplum-db-5.9.0-rhel7-x86_64.zip
+  mas-dev       = /data
+  seg-dev       = /data1
+  seg-dev       = /data2
+  user-id       = 500
+  segs-per-disk = 2
+  prefix        = gpseg
+  mas-port      = 5432
+  port-base     = 40000
+  mirror-split  = 2
+  verbose
+
+[-h|--help]
+
+  Displays the online help.
+
+Examples:
+
+gpdbinstall --hosts-config hosts-config --install-file greenplum-db-5.9.0-rhel7-x86_64.zip --mas-dev /data --seg-dev /data --gp-admin-name gpuser --user-id 3030 --mirror-split 1 -v
+#;
+
+sub trim{
+    my ($string) = @_;
+    $string =~ s/(^\s+|\s+$)//g;
+    return $string;
+}
+sub encode{
+    my ($string) = @_;
+    my $encode = encode_base64($string);
+    $encode =~ s/\n//g;
+    return $encode;
+}
+sub printMessage{
+    my ($flag,$message) = @_;
+    my $time_flag = strftime("%Y%m%d:%H:%M:%S.",localtime).$MAIN_PID;
+    $message = "$time_flag-[$flag]-:$message\n";
+    if("ERROR" eq $flag){
+        print STDERR $message;
+    }else{
+        print STDOUT $message;
+    }
+    return $message;
+}
+sub logMessage{
+    my ($flag,$message) = @_;
+    my $log_message = printMessage($flag,$message);
+    if($LOG_FILE_HANDLE == ""){
+        my $log_file_date = strftime("%Y%m%d",localtime);
+        open($LOG_FILE_HANDLE,">>","/tmp/gpdbinstall_$log_file_date.log");
+    }
+    print $LOG_FILE_HANDLE $log_message;
+}
+sub errorMessage{
+    my ($message) = @_;
+    logMessage("ERROR",$message);
+    print "Usage: $CMD_NAME [-h|--help] [options]\n";
+    exit 1;
+}
+sub readLineFromFile{
+    my ($file_path) = @_;
+    if(!-e $file_path){
+        errorMessage("No file exists named: $file_path");
+    }
+    if(!open(FILE,"<",$file_path)){
+        errorMessage("Can't open file: $file_path");
+    }
+    my @line_list = ();
+    while(my $line = <FILE>){
+        $line = trim($line);
+        if(!($line =~ /^#/) && "" ne $line){
+            push @line_list,$line;
+        }
+    }
+    close FILE;
+    return @line_list;
+}
+sub executeWithExpect{
+    my ($command,$expect_eof) = @_;
+    my $expect = "expect 2>&1 <<'END_OF_EXPECT'"."\n";
+    $expect = $expect.'spawn '.$command."\n";
+    $expect = $expect.'set timeout 180'."\n";
+    my $para_size = @_;
+    for my $index(2 .. $para_size - 1){
+        my $match_send_list = $_[$index];
+        $expect = $expect.'expect {'."\n";
+        for my $match_send(@$match_send_list){
+            my ($match,$send,$continue) = @$match_send;
+            $expect = $expect.'    "'.$match.'" { send "'.$send.'\r"'.($continue ? '; exp_continue ' : '').' }'."\n";
+        }
+        $expect = $expect.'}'."\n";
+    }
+    if($expect_eof){
+        $expect = $expect.'expect eof {  }'."\n";
+    }
+    $expect = $expect.'catch wait exitcode'."\n";
+    $expect = $expect.'exit [lindex $exitcode 3]'."\n";
+    $expect = $expect.'END_OF_EXPECT'."\n";
+    if($VERBOSE){
+        logMessage("INFO","Expect command:\n".$expect);
+    }
+    my $output = readpipe($expect);
+    my $exit_code = $? >> 8;
+    if($exit_code != 0 && $output !~ /expect: spawn id .* not open/){
+        errorMessage("Error($exit_code) occur when execute expect:\n".$output);
+    }
+    if($VERBOSE){
+        logMessage("INFO","Expect output:\n".$output);
+    }
+    return $output;
+}
+sub getOption{
+    GetOptions(
+        'hosts-config:s'      => \$HOSTS_CONFIG,
+        'password:s'          => \$PASSWORD,
+        'gp-admin-name:s'     => \$GP_ADMIN_NAME,
+        'install-file:s'      => \$INSTALL_FILE,
+        'gp-version:s'        => \$GP_VERSION,
+        'mas-dev:s'           => \$MASTER_DEV,
+        'seg-dev:s'           => \@SEGMENT_DEV,
+        'user-id:i'           => \$USER_ID,
+        'segs-per-disk:i'     => \$SEGS_PER_DISK,
+        'prefix:s'            => \$PREFIX,
+        'mas-port:i'          => \$MASTER_PORT,
+        'port-base:i'         => \$PORT_BASE,
+        'mirror-split:i'      => \$MIRROR_SPLIT,
+        'verbose|v!'          => \$VERBOSE,
+        'parameter-file|pf:s' => \$PARAMETER_FILE,
+        'h|help!'             => \$IS_HELP,
+    );
+    if(@ARGV != 0){
+        errorMessage("Some parameters unknown: [@ARGV]\nPlease refer to $CMD_NAME --help");
+    }
+    if($IS_HELP){
+        print $HELP_MESSAGE;
+        exit 0;
+    }
+    if("" ne $PARAMETER_FILE){
+        my @parameter_list = readLineFromFile($PARAMETER_FILE);
+        for my $line(@parameter_list){
+            my ($para,$val) = split(/=/,$line,2);
+            ($para,$val) = (trim($para),trim($val));
+            if("hosts-config"  eq $para  && "" eq $HOSTS_CONFIG  ){$HOSTS_CONFIG    = $val;}
+            if("password"      eq $para  && "" eq $PASSWORD      ){$PASSWORD        = $val;}
+            if("gp-admin-name" eq $para  && "" eq $GP_ADMIN_NAME ){$GP_ADMIN_NAME   = $val;}
+            if("install-file"  eq $para  && "" eq $INSTALL_FILE  ){$INSTALL_FILE    = $val;}
+            if("gp-version"    eq $para  && "" eq $GP_VERSION    ){$GP_VERSION      = $val;}
+            if("mas-dev"       eq $para  && "" eq $MASTER_DEV    ){$MASTER_DEV      = $val;}
+            if("seg-dev"       eq $para                          ){push @SEGMENT_DEV, $val;}
+            if("user-id"       eq $para  && "" eq $USER_ID       ){$USER_ID         = $val;}
+            if("segs-per-disk" eq $para  && "" eq $SEGS_PER_DISK ){$SEGS_PER_DISK   = $val;}
+            if("prefix"        eq $para  && "" eq $PREFIX        ){$PREFIX          = $val;}
+            if("mas-port"      eq $para  && "" eq $MASTER_PORT   ){$MASTER_PORT     = $val;}
+            if("port-base"     eq $para  && "" eq $PORT_BASE     ){$PORT_BASE       = $val;}
+            if("mirror-split"  eq $para  && "" eq $MIRROR_SPLIT  ){$MIRROR_SPLIT    = $val;}
+            if(("verbose"      eq $para  ||
+                "v"            eq $para) && "" eq $VERBOSE       ){$VERBOSE         = 1   ;}
+        }
+    }
+}
+sub checkEnvironment{
+    $CURRENT_USER_NAME = trim(readpipe("whoami"));
+    if("" eq $GP_ADMIN_NAME){
+        if("root" eq $CURRENT_USER_NAME){
+            $GP_ADMIN_NAME = "gpadmin";
+        }else{
+            $GP_ADMIN_NAME = $CURRENT_USER_NAME;
+        }
+        logMessage("WARN","Not specify parameter: --gp-admin-user, will use default user:\n".$GP_ADMIN_NAME);
+    }
+    readpipe(qq{timeout -s 9 1 sudo date});
+    my $sudoCode = $?;
+    if($sudoCode != 0){
+        errorMessage("Current user $CURRENT_USER_NAME can not sudo to root without password");
+    }
+    my $whichCode;
+    my @problemList = ();
+    for my $cmd(@NEED_COMMAND){
+        system("which $cmd > /dev/null 2>&1");
+        $whichCode = $? >> 8;
+        if($whichCode != 0){
+            push @problemList,$cmd;
+        }
+    }
+    if(@problemList > 0){
+        errorMessage("Environment not enough to continue install, command ".join(',',@problemList)." not found in current environment");
+    }else{
+        logMessage("INFO","All command ".(join(',',@NEED_COMMAND))." found in current environment");
+    }
+}
+sub checkOption{
+    logMessage("INFO","Check options legal".("." x 16));
+    if(!-f $HOSTS_CONFIG){
+        errorMessage("Please specify parameter: --hosts-config");
+    }
+    if("" eq $INSTALL_FILE && "" eq $GP_VERSION){
+        errorMessage("Please specify parameter: --install-file or --gp-version");
+    }
+    if("" ne $GP_VERSION){
+        my $install_path = "/usr/local/greenplum-db-$GP_VERSION";
+        if(!-e $install_path){
+            errorMessage("Install path not exists: $install_path");
+        }
+        $INSTALL_VERSION = $GP_VERSION;
+    }elsif( !-f $INSTALL_FILE){
+        errorMessage("File not exists: $INSTALL_FILE");
+    }
+    if($MASTER_DEV eq ""){
+        errorMessage("Please specify parameter: --mas-dev");
+    }
+    if(@SEGMENT_DEV < 1){
+        errorMessage("Please specify parameter: --seg-dev");
+    }else{
+        @SEGMENT_DEV = sort {$a cmp $b} @SEGMENT_DEV;
+    }
+    if($USER_ID eq ""){
+        $USER_ID = 500;
+        logMessage("NOTICE","Not specify --user-id, use default value: $USER_ID");
+    }elsif(int($USER_ID) ne $USER_ID){
+        errorMessage("Please specify parameter a integer value: --user-id");
+    }
+    if($SEGS_PER_DISK eq ""){
+        $SEGS_PER_DISK = 2;
+        logMessage("NOTICE","Not specify --segs-per-disk, use default value: $SEGS_PER_DISK");
+    }elsif(int($SEGS_PER_DISK) ne $SEGS_PER_DISK){
+        errorMessage("Please specify parameter a integer value: --segs-per-disk");
+    }elsif($SEGS_PER_DISK < 1){
+        errorMessage("Please specify parameter bigger than 0: --segs-per-disk");
+    }
+    if($PREFIX eq ""){
+        $PREFIX = "gpseg";
+        logMessage("NOTICE","Not specify --prefix, use default value: $PREFIX");
+    }
+    if($MASTER_PORT eq ""){
+        $MASTER_PORT = 5432;
+        logMessage("NOTICE","Not specify --mas-port, use default value: $MASTER_PORT");
+    }elsif(int($MASTER_PORT) ne $MASTER_PORT){
+        errorMessage("Please specify parameter a integer value: --mas-port");
+    }elsif($MASTER_PORT > 65535){
+        errorMessage("Please specify parameter less than 65535: --mas-port");
+    }
+    if($PORT_BASE eq ""){
+        $PORT_BASE = 40000;
+        logMessage("NOTICE","Not specify --port-base, use default value: $PORT_BASE");
+    }elsif(int($PORT_BASE) ne $PORT_BASE){
+        errorMessage("Please specify parameter a integer value: --port-base");
+    }elsif($PORT_BASE > 54000){
+        errorMessage("Please specify parameter value less than 54000: --port-base");
+    }
+    if($MIRROR_SPLIT eq ""){
+        $MIRROR_SPLIT = 2;
+        logMessage("NOTICE","Not specify --mirror-split, use default value: $MIRROR_SPLIT");
+    }
+    if("" eq $PASSWORD){
+        logMessage("WARN","Please input password for current user:");
+        $PASSWORD = <STDIN>;
+        $PASSWORD = trim($PASSWORD);
+    }
+}
+sub checkHostsConfig{
+    logMessage("INFO","Check host config".("." x 16));
+    my @config_list = readLineFromFile($HOSTS_CONFIG);
+    my %seg_ip_hash = ();
+    my %seg_host_hash = ();
+    for my $config(@config_list){
+        my ($ip,$hostname,$role,$ring) = split(/:/,$config);
+        ($ip,$hostname,$role,$ring) = (trim(uc($ip)),trim(lc($hostname)),trim(uc($role)),trim(uc($ring)));
+        if($ring !~ /^\d+\.\d+$/){
+            errorMessage("Ring number format must like integer.integer");
+        }
+        my ($ring_number,$ring_order) = split(/\./,$ring);
+        system(qq{ping $ip -c 1 -w 1 > /dev/null 2>&1});
+        my $exit_code = $? >> 8;
+        if($exit_code != 0){
+            errorMessage("Try to ping ip failed within 1 second: $ip");
+        }
+        if($role =~ /^M/){
+            if(@MASTER_CONFIG > 0){
+                errorMessage("Host config incorrect, Master config duplicate");
+            }
+            @MASTER_CONFIG = ($ip,$hostname);
+        }elsif($role =~ /^ST/){
+            if(@STANDBY_CONFIG > 0){
+                errorMessage("Host config incorrect, Standby config duplicate");
+            }
+            @STANDBY_CONFIG = ($ip,$hostname);
+        }else{
+            if(exists $seg_ip_hash{$ip}){
+                errorMessage("Host config incorrect, ip: $ip duplicate");
+            }elsif(exists $seg_host_hash{$hostname}){
+                errorMessage("Host config incorrect, hostname: $hostname duplicate");
+            }
+            if($role =~ /^SE/){
+                push @SEG_INSTALL_CONFIG_ARRAY,[($ip,$hostname,$role,$ring_number,$ring_order,$ring)];
+            }else{
+                $role = "Backup";
+            }
+            $seg_ip_hash{$ip} = $hostname;
+            $seg_host_hash{$hostname} = "";
+        }
+        push @ALLHOST_CONFIG_ARRAY,[($ip,$hostname,$role,$ring_number,$ring_order)];
+    }
+    if(@MASTER_CONFIG < 1){
+        errorMessage("Not find master machine config");
+    }
+    if(@SEG_INSTALL_CONFIG_ARRAY < 1){
+        errorMessage("Not find segment machine config");
+    }
+    my ($m_ip,$m_hostname) = @MASTER_CONFIG;
+    if(exists $seg_ip_hash{$m_ip}){
+        logMessage("WARN","Master ip is same with a segment");
+        $m_hostname = $seg_ip_hash{$m_ip};
+        @MASTER_CONFIG = ($m_ip,$m_hostname);
+    }
+    my $current_is_master = readpipe(qq{sudo ip a|grep -o ' $m_ip/'});
+    if(trim($current_is_master) ne $m_ip.'/'){
+        errorMessage("Not find master's ip on current machine: $m_ip.");
+    }
+    my ($s_ip,$s_hostname) = @STANDBY_CONFIG;
+    if($s_ip eq $m_ip){
+        logMessage("WARN","Standby can not on the same machine with Master");
+        @STANDBY_CONFIG = ();
+    }elsif(exists $seg_ip_hash{$s_ip}){
+        logMessage("WARN","Standby ip is same with a segment");
+        $s_hostname = $seg_ip_hash{$s_ip};
+        @STANDBY_CONFIG = ($s_ip,$s_hostname);
+    }
+    my @temp_array = ();
+    for my $config(@ALLHOST_CONFIG_ARRAY){
+        my ($ip,$hostname,$role,$ring_number,$ring_order) = @$config;
+        if($role =~ /^M/){
+            $hostname = $m_hostname;
+        }elsif($role =~ /^ST/){
+            if(@STANDBY_CONFIG == 0){
+                next;
+            }
+            $hostname = $s_hostname;
+        }
+        push @temp_array,[($ip,$hostname,$role,$ring_number,$ring_order)];
+    }
+    @ALLHOST_CONFIG_ARRAY = @temp_array;
+}
+sub checkPasswordAndSudo{
+    logMessage("INFO","Check password for all machine".("." x 16));
+    for my $config(@ALLHOST_CONFIG_ARRAY){
+        my ($ip,$hostname,$role,$ring_number,$ring_order) = @$config;
+        my $command = qq{ssh -o NumberOfPasswordPrompts=1 $ip -T "sudo date"};
+        executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
+    }
+}
+sub checkRingConfig{
+    logMessage("INFO","Check ring legal".("." x 16));
+    @SEG_INSTALL_CONFIG_ARRAY = sort {$a->[5] <=> $b->[5]} @SEG_INSTALL_CONFIG_ARRAY;
+    my $ring_size = 0;
+    my $index = 0;
+    my $max_index = @SEG_INSTALL_CONFIG_ARRAY - 1;
+    my ($pre_number,$pre_order);
+    for my $config(@SEG_INSTALL_CONFIG_ARRAY){
+        my ($ip,$hostname,$role,$ring_number,$ring_order) = @$config;
+        if($pre_number == $ring_number && $pre_order == $ring_order){
+            errorMessage("Diffrent host have same order in same ring");
+        }
+        if($index == $max_index){
+            $ring_size += 1;
+        }
+        if($ring_size > 0){
+            if($pre_number != $ring_number || $index == $max_index){
+                if($ring_size <= $MIRROR_SPLIT){
+                    errorMessage("Host number: $ring_size in one ringe is not enough for mirror split: $MIRROR_SPLIT");
+                }
+                $ring_size = 0;
+            }
+        }
+        ($pre_number,$pre_order) = ($ring_number,$ring_order);
+        $ring_size += 1;
+    }
+}
+sub modifySystemConfig{
+    logMessage("INFO","Modify system config for greenplum install".("." x 16));
+    my $file_handle;
+    if(!open($file_handle,">",$COMMAND_FILE_NAME)){
+        errorMessage("Can not open file $COMMAND_FILE_NAME");
+    }
+    my $config_command = readpipe(qq{cat $CMD_NAME|sed -n '/^____CONFIG_COMMAND_SHELL_START____\$/,/^____CONFIG_COMMAND_SHELL_END____\$/p'|grep -v '____'});
+    $config_command =~ s/gpadmin/$GP_ADMIN_NAME/g;
+    print $file_handle $config_command;
+    my $time_flag = strftime("%Y%m%d%H%M%S",localtime);
+    print $file_handle "cp /etc/hosts /etc/hosts.$time_flag\n";
+    print $file_handle "echo '127.0.0.1    localhost\n";
+    print $file_handle "#Greenplum hosts start\n";
+    for my $config(@ALLHOST_CONFIG_ARRAY){
+        my ($ip,$hostname,$role,$ring_number,$ring_order) = @$config;
+        print $file_handle "$ip    $hostname\n";
+    }
+    print $file_handle "#Others' > /etc/hosts\n";
+    print $file_handle "##################################################################################\n";
+    close $file_handle;
+    my ($master_path,$segment_path);
+    for my $config(@ALLHOST_CONFIG_ARRAY){
+        my ($ip,$hostname,$role,$ring_number,$ring_order) = @$config;
+        my $mode = "S";
+        my $device = join(".",@SEGMENT_DEV);
+        if($role =~ "^M" || $role =~ "^ST"){
+            $mode = "M";
+            $device = $MASTER_DEV;
+        }
+        my $command = qq{scp -q $COMMAND_FILE_NAME $hostname:$COMMAND_FILE_NAME};
+        executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
+        $command = qq{ssh $ip -T "sudo sh $COMMAND_FILE_NAME $hostname $GP_ADMIN_NAME $USER_ID $mode $device"};
+        my $output = executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
+        my @array = split(/\n/,trim($output));
+        my $path;
+        for my $line(@array){
+            if($line =~ /^####----/){
+                $path = trim(substr($line,8));
+                last;
+            }
+        }
+        logMessage("INFO","Machine $ip $hostname find data path: $path");
+        if($role =~ "^M" || $role =~ "^ST"){
+            if("" eq $master_path){
+                $master_path = $path;
+            }elsif($master_path ne $path){
+                errorMessage("Master data path must be same with Standby: $master_path <=> $path");
+            }
+        }else{
+            if("" eq $segment_path){
+                $segment_path = $path;
+            }elsif($segment_path ne $path){
+                errorMessage("Segment data path must be same with all others: $segment_path <=> $path");
+            }
+        }
+    }
+    if("" eq $master_path){
+        errorMessage("Not find Master data path");
+    }
+    if("" eq $segment_path){
+        errorMessage("Not find Segment data path");
+    }
+    $MASTER_DEV = $master_path;
+    if($VERBOSE){
+        logMessage("INFO","Master install directory is:\n".$master_path);
+    }
+    @SEGMENT_DEV = split(/ /,$segment_path);
+    if($VERBOSE){
+        logMessage("INFO","Segment install directory is:\n".$segment_path);
+    }
+}
+sub installBinary{
+    logMessage("INFO","Try to install binary file on current machine".("." x 16));
+    if("" eq $GP_VERSION){
+        if($INSTALL_FILE =~ /\.zip$/){
+            my $output = trim(readpipe(qq(sudo unzip -o $INSTALL_FILE -d $WORK_PATH/|grep inflating|awk '{print \$2}')));
+            if(-f $output && $output =~ /\.bin$/){
+                $INSTALL_FILE = $output;
+            }else{
+                errorMessage("Unzip install file $INSTALL_FILE to $WORK_PATH occur error:\n".$output);
+            }
+        }
+        if($INSTALL_FILE !~ /\.bin$/){
+            errorMessage("Unidentified file format:\n".$INSTALL_FILE);
+        }
+        my $command = qq{sudo bash $INSTALL_FILE};
+        executeWithExpect($command,0,([["license agreement","q"]]),([["yes|no","yes"]]),([["installation path",""]]),([["yes|no","yes",1],["*#"]]));
+        logMessage("INFO","Try to get install path");
+        if($INSTALL_FILE =~ /(\d+(\.\d+){2,3})/){
+            $INSTALL_VERSION = $1;
+        }else{
+            errorMessage("Can't get version infomation from install file:\n".$INSTALL_FILE);
+        }
+    }
+    my $env_file = "/usr/local/greenplum-db-$INSTALL_VERSION/greenplum_path.sh";
+    if(!-f $env_file){
+        errorMessage("Not found greenplum envirenment file:\n".$env_file);
+    }
+    logMessage("INFO","Install path is:\n"."/usr/local/greenplum-db-$INSTALL_VERSION");
+    my $output = readpipe(qq{cd /usr/local/;sudo tar -cf /tmp/greenplum-db.install.tmp.tar greenplum-db-$INSTALL_VERSION;sudo chown $CURRENT_USER_NAME. /tmp/greenplum-db.install.tmp.tar});
+    for my $config(@ALLHOST_CONFIG_ARRAY){
+        my ($ip,$hostname,$role,$ring_number,$ring_order) = @$config;
+        my $encode_cmd = encode("if [ -e /usr/local/greenplum-db-$INSTALL_VERSION ];then chown -R $GP_ADMIN_NAME. /usr/local/greenplum*;echo EXISTS;fi");
+        my $command = qq{ssh $hostname -T "echo $encode_cmd|base64 -di|bash"};
+        my $output = executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
+        if($output =~ /EXISTS/){
+            next;
+        }
+        $command = qq{scp -q /tmp/greenplum-db.install.tmp.tar $hostname:/tmp/greenplum-db.install.tar};
+        executeWithExpect($command,0,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
+        $command = qq{ssh $hostname -T "cd /usr/local/;sudo tar -xf /tmp/greenplum-db.install.tar;sudo rm -f greenplum-db;};
+        $command = $command.qq{sudo ln -s greenplum-db-$INSTALL_VERSION greenplum-db;sudo chown -R $GP_ADMIN_NAME. greenplum*;sudo rm -f /tmp/greenplum-db.install.tar"};
+        executeWithExpect($command,1,([["yes/no","yes"],["password",$PASSWORD],["*#"]]));
+    }
+    system(qq{sudo rm -f /tmp/greenplum-db.install.tmp.tar});
+}
+sub createSegmentFile{
+    logMessage("INFO","Create segment files".("." x 16));
+    my ($all_hosts,$all_segs_install) = ($WORK_PATH."/all_hosts",$WORK_PATH."/all_segs_install");
+    readpipe(qq{sudo rm -f $all_hosts $all_segs_install});
+    my ($all_hosts_handle,$all_segs_install_handle);
+    if(!open($all_hosts_handle,">",$all_hosts)){
+        errorMessage("Can't open file: $all_hosts");
+    }
+    if(!open($all_segs_install_handle,">",$all_segs_install)){
+        errorMessage("Can't open file: $all_segs_install");
+    }
+    for my $config(@ALLHOST_CONFIG_ARRAY){
+        my ($ip,$hostname,$role,$ring_number,$ring_order) = @$config;
+        print $all_hosts_handle $hostname."\n";
+        print $all_hosts_handle $ip."\n";
+        if($role =~ /^SE/){
+            print $all_segs_install_handle $hostname."\n";
+        }
+    }
+    close $all_hosts_handle;
+    close $all_segs_install_handle;
+}
+sub exchangeGpadminKey{
+    logMessage("INFO","Exchange key for $GP_ADMIN_NAME");
+    my $command = qq{sudo su - $GP_ADMIN_NAME -c "gpssh-exkeys -f $WORK_PATH/all_hosts"};
+    executeWithExpect($command,0,([["password",$GP_ADMIN_NAME,1],["*#"]]));
+}
+sub initGpSystem{
+    logMessage("INFO","Start greenplum initsystem");
+    readpipe(qq{. /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1;psql -h 127.0.0.1 -U $GP_ADMIN_NAME -p $MASTER_PORT -l > /dev/null 2>&1});
+    my $exit_code = $? >> 8;
+    if($exit_code == 0){
+        logMessage("WARN","Find cluster run on the same port, skip gpinitsystem.");
+        $CLUSTER_EXISTS = 1;
+        return;
+    }
+    my @init_config = ();
+    push @init_config,qq{ARRAY_NAME="Pivotal Greenplum DW"};
+    push @init_config,qq{SEG_PREFIX=$PREFIX};
+    push @init_config,qq{PORT_BASE=$PORT_BASE};
+    my $data_directory = "declare -a DATA_DIRECTORY=(";
+    for my $path(@SEGMENT_DEV){
+        for my $idx(1 .. $SEGS_PER_DISK){
+            $data_directory = $data_directory."$path/primary/default "
+        }
+    }
+    my ($m_ip,$m_hostname) = @MASTER_CONFIG;
+    $data_directory = trim($data_directory).")";
+    push @init_config,$data_directory;
+    push @init_config,qq{MASTER_HOSTNAME=$m_hostname};
+    push @init_config,qq{MASTER_DIRECTORY=$MASTER_DEV/master/default};
+    push @init_config,qq{MASTER_PORT=$MASTER_PORT};
+    push @init_config,qq{TRUSTED_SHELL=ssh};
+    push @init_config,qq{CHECK_POINT_SEGMENTS=8};
+    push @init_config,qq{ENCODING=UNICODE};
+    open(my $init_handle,">","$WORK_PATH/gpinitsystem_config");
+    for my $line(@init_config){
+        print $init_handle $line."\n";
+    }
+    close $init_handle;
+    my $output = readpipe(qq{sudo chown $GP_ADMIN_NAME. $WORK_PATH/gpinitsystem_config});
+    system(qq{sudo su - $GP_ADMIN_NAME -c "rm -f gpAdminLogs/gpinitsystem_*.log"});
+    my $command = qq{sudo su - $GP_ADMIN_NAME -c "gpinitsystem -a --lc-collate=C -c $WORK_PATH/gpinitsystem_config -h $WORK_PATH/all_segs_install"};
+    logMessage("INFO","Execute command:\n".$command);
+    system($command);
+    my $exit_code = $? >> 8;
+    if($exit_code != 0){
+        errorMessage("Error($exit_code) occur when execute system initialization.");
+    }
+}
+sub queryResult{
+    my ($query_sql) = @_;
+    my $CMDS = ". /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1;PGDATABASE=postgres PGPORT=$MASTER_PORT ";
+    $CMDS = $CMDS."psql -h 127.0.0.1 -U $GP_ADMIN_NAME -qtAXF '#!^' -v ON_ERROR_STOP=1 2>&1 <<'END_OF_SQL'\n";
+    $CMDS = $CMDS."set client_encoding to utf8;\n";
+    $CMDS = $CMDS."set optimizer to off;\n";
+    $CMDS = $CMDS.$query_sql."\n";
+    $CMDS = $CMDS."END_OF_SQL\n";
+    my $query_result = readpipe($CMDS);
+    my $return_code = $? >> 8;
+    $query_result = trim($query_result);
+    if($return_code){
+        errorMessage("Error($return_code) occur when execute query:\n".$query_result);
+    }else{
+        my @rows_arry = split(/\n/,$query_result);
+        my @return_list = ();
+        for my $row(@rows_arry){
+            push @return_list,[split(/#\!\^/,$row)];
+        }
+        return @return_list;
+    }
+}
+sub addMirror{
+    logMessage("INFO","Add mirror instance".("." x 16));
+    if($MIRROR_SPLIT < 1){
+        logMessage("WARN","Mirror split value small than 1, no need to add mirrors, skip this step.");
+        return;
+    }
+    if($SEGS_PER_DISK % $MIRROR_SPLIT != 0){
+        logMessage("WARN","Can not split mirrors, instance per disk must be integral multiple to host number of mirror split");
+        return;
+    }
+    my $install_seg_size = @SEG_INSTALL_CONFIG_ARRAY;
+    if($install_seg_size % ($MIRROR_SPLIT + 1) != 0){
+        logMessage("WARN","Can not ensure all mirror loop match the split number for all segments number mod loop number ".($MIRROR_SPLIT + 1)." != 0");
+    }
+    my @primary_config_list;
+    my $query = qq{select hostname,content,substr((string_to_array(fselocation,'/'))[2],5),port from gp_segment_configuration c, pg_filespace_entry e\n};
+    $query = $query.qq{where c.dbid = e.fsedbid\n};
+    $query = $query.qq{and e.fsefsoid = (select oid from pg_filespace where fsname = 'pg_system')\n};
+    $query = $query.qq{and c.preferred_role = 'p' and c.content > -1 order by 1,2};
+    @primary_config_list = queryResult($query);
+    my %primary_config_map = ();
+    for my $config(@primary_config_list){
+        my ($hostname,$content,$data_detail,$port) = @$config;
+        my @config_array = ();
+        if(! exists $primary_config_map{$hostname}){
+            $primary_config_map{$hostname} = \@config_array;
+        }
+        @config_array = @{$primary_config_map{$hostname}};
+        push @config_array,$config;
+        $primary_config_map{$hostname} = \@config_array;
+    }
+    my @mirror_config_list;
+    my @node_array;
+    my $index = 0;
+    my $max_index = @SEG_INSTALL_CONFIG_ARRAY - 1;
+    my ($pre_hostname,$pre_number);
+    for my $config(@SEG_INSTALL_CONFIG_ARRAY){
+        my ($ip,$hostname,$role,$ring_number,$ring_order) = @$config;
+        if($index > 0){
+            if($index == $max_index){
+                push @node_array,$hostname;
+            }
+            if($pre_number != $ring_number || $index == $max_index){
+                my $node_size = @node_array;
+                my $node_index = 0;
+                for my $node(@node_array){
+                    my @primary_config_array = @{$primary_config_map{$node}};
+                    my $primary_index = 0;
+                    for my $primtry_config(@primary_config_array){
+                        my ($p_hostname,$p_content,$p_data_detail,$p_port) = @$primtry_config;
+                        my $mirror_position = ((($primary_index / ($SEGS_PER_DISK / $MIRROR_SPLIT)) % $MIRROR_SPLIT) + $node_index + 1) % $node_size;
+                        my $m_hostname = $node_array[$mirror_position];
+                        my ($m_port,$m_r_port,$p_r_port) = ($p_port + 10000,$p_port + 11000,$p_port + 1000);
+                        my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:/data$p_data_detail/mirror/default/gpseg$p_content";
+                        push @mirror_config_list,$m_config;
+                        $primary_index += 1;
+                    }
+                    $node_index += 1;
+                }
+                @node_array = ();
+            }
+        }
+        push @node_array,$hostname;
+        ($pre_hostname,$pre_number) = ($pre_hostname,$ring_number);
+        $index += 1;
+    }
+    my $file_name = "$WORK_PATH/gp_add_mirror_config";
+    my $file_handle;
+    if(!open($file_handle,">",$file_name)){
+        errorMessage("Can't open file: $file_name");
+    }
+    print $file_handle "filespaceOrder=\n";
+    for my $config(@mirror_config_list){
+        print $file_handle $config."\n";
+    }
+    close $file_handle;
+    my $command = qq{sudo su - $GP_ADMIN_NAME -c "gpaddmirrors -i $file_name -a"};
+    if($CLUSTER_EXISTS){
+        logMessage("INFO","Addmirrors use this command".$command);
+    }else{
+        logMessage("INFO","Execute command:\n".$command);
+        system($command);
+        my $exit_code = $? >> 8;
+        if($exit_code != 0){
+            errorMessage("Error($exit_code) occur when execute gpaddmirrors.");
+        }
+        for my $trys(1 .. 200){
+            sleep(3);
+            my $command = qq{. /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1;psql -h 127.0.0.1 -U $GP_ADMIN_NAME -p $MASTER_PORT -d template1 -qtAXc};
+            $command = $command.qq{ "select count(*) from gp_segment_configuration where mode <> 's';"};
+            my $output = trim(readpipe($command));
+            if("0" eq $output){
+                last;
+            }
+            logMessage("INFO","Waiting for mirror mode change to Synchronized [$output]");
+        }
+    }
+}
+sub addGPFileSpace{
+    logMessage("INFO","Add one filespace gpfs".("." x 16));
+    my $query = qq{select hostname,dbid,replace(fselocation,'default','gpfs') path from gp_segment_configuration c, pg_filespace_entry e
+    where c.dbid = e.fsedbid
+    and e.fsefsoid = (select oid from pg_filespace where fsname = 'pg_system')
+    order by 2;};
+    my @gpfs_config_list = queryResult($query);
+    my $file_name = "$WORK_PATH/gpfilespace_gpfs";
+    my $file_handle;
+    if(!open($file_handle,">",$file_name)){
+        errorMessage("Can't open file: $file_name");
+    }
+    print $file_handle "filespace:gpfs\n";
+    for my $config(@gpfs_config_list){
+        my ($hostname,$dbid,$path) = @$config;
+        print $file_handle "$hostname:$dbid:$path"."\n";
+    }
+    close $file_handle;
+    my $command = qq{sudo su - $GP_ADMIN_NAME -c "gpfilespace -c $file_name"};
+    if($CLUSTER_EXISTS){
+        logMessage("INFO","Greenplum database is running pre this installation, you can use this command to add gp filespace:\n ".$command);
+    }else{
+        logMessage("INFO","Execute command:\n".$command);
+        system($command);
+        my $exit_code = $? >> 8;
+        if($exit_code != 0){
+            errorMessage("Error($exit_code) occur when execute gpfilespace.");
+        }
+    }
+}
+sub addStandby{
+    logMessage("INFO","Add standby master".("." x 16));
+    if(@STANDBY_CONFIG > 0){
+        my ($ip,$hostname) = @STANDBY_CONFIG;
+        my $command = qq{sudo su - $GP_ADMIN_NAME -c "gpinitstandby -a -s $hostname"};
+        if($CLUSTER_EXISTS){
+            logMessage("INFO","Use this command to add standby master:\n".$command);
+        }else{
+            executeWithExpect($command,0,([[">","",1],["*#"]]));
+        }
+    }else{
+        logMessage("WARN","No standby master should config.");
+    }
+}
+sub main{
+    getOption();
+    checkEnvironment();
+    checkOption();
+    logMessage("INFO","Start greenplum cluster auto install process".("." x 15));
+    logMessage("INFO","Run command: ".$_[0]);
+    checkHostsConfig();
+    checkPasswordAndSudo();
+    checkRingConfig();
+    modifySystemConfig();
+    installBinary();
+    createSegmentFile();
+    exchangeGpadminKey();
+    initGpSystem();
+    addMirror();
+    addGPFileSpace();
+    addStandby();
+}
+my $command_string = $0." ".join(" ",@ARGV);
+$| = 1;
+main($command_string);
+
+=start
+____CONFIG_COMMAND_SHELL_START____
+#!/bin/bash
+cd $(cd "$(dirname "$0")"; pwd)
+HSNM=$1
+USNM=$2
+USID=$3
+MODE=$4
+DEVC=$5
+Directorys=""
+##################################################################################
+CURRENT_USER=`whoami`
+if [ $CURRENT_USER != "root" ];then
+    echo "This script can only be executed by the root."
+    exit 1
+fi
+##################################################################################
+for command in "zip" "unzip" "bash" "tar" "sed" "perl" "ssh" "ifconfig" "mkfs.xfs";do
+    which $command                                                                > /dev/null 2>&1
+    exitcode=$?
+    if [ $exitcode != 0 ];then
+        echo "Environment not enough to continue install, command $command not found in current environment"
+        exit 2
+    fi
+done
+##################################################################################
+IS_RHEL=0
+IS_SuSE=0
+RHEL_VERSION=0
+if [ -f /etc/redhat-release ];then
+    IS_RHEL=1
+    RHEL_VERSION=`cat /etc/redhat-release|grep -o "[0-9]"|head -n 1`
+elif [ -f '/etc/SuSE-release' ];then
+    IS_SuSE=1
+fi
+if [[ $IS_RHEL == 0 && $IS_SuSE == 0 ]];then
+    echo "Unsupported operating systems."
+    exit 3
+fi
+##################################################################################
+if [ $IS_RHEL == 1 ];then
+    if [ $RHEL_VERSION == 7 ];then
+        systemctl stop firewalld.service                                          > /dev/null 2>&1
+        systemctl disable firewalld.service                                       > /dev/null 2>&1
+    else
+        service iptables stop                                                     > /dev/null 2>&1
+        chkconfig iptables off                                                    > /dev/null 2>&1
+    fi
+elif [ $IS_SuSE == 1 ];then
+    yast runlevel delete service=SuSEfirewall2_init runlevels=B                   > /dev/null 2>&1
+    yast runlevel delete service=SuSEfirewall2_setup runlevels=B                  > /dev/null 2>&1
+fi
+##################################################################################
+if [ $IS_RHEL == 1 ];then
+    sed s/^SELINUX=.*$/SELINUX=disabled/ -i /etc/selinux/config
+    setenforce 0                                                                  > /dev/null 2>&1
+elif [ $IS_SuSE == 1 ];then
+    yast runlevel delete service=boot.apparmor runlevels=B                        > /dev/null 2>&1
+fi
+##################################################################################
+hostname $HSNM
+if [ -f /etc/sysconfig/network ];then
+    echo 'NETWORKING=yes'  > /etc/sysconfig/network
+    echo 'HOSTNAME=$HSNM' >> /etc/sysconfig/network
+fi
+if [ -f /etc/hostname ];then
+    echo $HSNM > /etc/hostname
+fi
+if [ -f /etc/HOSTNAME ];then
+    echo $HSNM > /etc/HOSTNAME
+fi
+##################################################################################
+sed -e /^[^#]/d -e /^[:space:]*$/d -i /etc/security/limits.conf
+echo ''                            >> /etc/security/limits.conf
+echo '* soft nofile 1048576'       >> /etc/security/limits.conf
+echo '* hard nofile 1048576'       >> /etc/security/limits.conf
+echo '* soft nproc  1048576'       >> /etc/security/limits.conf
+echo '* hard nproc  1048576'       >> /etc/security/limits.conf
+nprocname="/etc/security/limits.d/90-nproc.conf"
+if [ -f "/etc/security/limits.d/20-nproc.conf" ];then
+    nprocname="/etc/security/limits.d/20-nproc.conf"
+fi
+if [ -f $nprocname ];then
+    sed -e /^[^#]/d -e /^[:space:]*$/d -i            $nprocname
+    echo ''                                       >> $nprocname
+    echo '*          soft    nproc     unlimited' >> $nprocname
+    echo 'root       soft    nproc     unlimited' >> $nprocname
+fi
+##################################################################################
+echo 'kernel.shmmax = 50000000000
+kernel.shmmni = 40960
+kernel.shmall = 40000000000
+kernel.sem = 250 5120000 100 20480
+kernel.sysrq = 1
+kernel.core_uses_pid = 1
+kernel.msgmnb = 1048576
+kernel.msgmax = 1048576
+kernel.msgmni = 32768
+net.ipv4.tcp_syncookies = 1
+net.ipv4.ip_forward = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv4.tcp_tw_recycle = 1
+net.ipv4.tcp_max_syn_backlog = 32768
+net.ipv4.conf.all.arp_filter = 1
+net.ipv4.ip_local_port_range = 1025 65535
+net.ipv4.ip_local_reserved_ports = 5432,40000-40015,41000-41015,50000-50015,51000,51015
+net.core.netdev_max_backlog = 80000
+net.core.rmem_default = 2097152
+net.core.rmem_max = 16777216
+net.core.wmem_max = 16777216
+vm.overcommit_memory = 2
+vm.overcommit_ratio = 95' > /etc/sysctl.conf
+sysctl -p                                                                         > /dev/null 2>&1
+##################################################################################
+localfile="/etc/rc.d/rc.local"
+if [ -f "/etc/init.d/boot.local" ];then
+    localfile="/etc/init.d/boot.local"
+fi
+chmod +x $localfile
+sed -e /^[^#]/d -e /^[:space:]*$/d -i $localfile
+echo ''                                                                   >> $localfile
+echo 'touch /var/lock/subsys/local'                                       >> $localfile
+echo 'blockdev --setra 16384 /dev/sd*'                                    >> $localfile
+echo 'for i in /sys/block/sd*/queue/scheduler;do echo deadline > $i;done' >> $localfile
+echo 'echo never > /sys/kernel/mm/transparent_hugepage/enabled'           >> $localfile
+sh $localfile                                                                     > /dev/null 2>&1
+##################################################################################
+sed s/.*MaxStartups.*/'MaxStartups 400:30:500'/ -i /etc/ssh/sshd_config
+if [ $IS_RHEL == 1 ];then
+    if [ $RHEL_VERSION == 7 ];then
+        systemctl restart sshd.service                                            > /dev/null 2>&1
+    else
+        service sshd restart                                                      > /dev/null 2>&1
+    fi
+elif [ $IS_SuSE == 1 ];then
+    service ssh restart                                                           > /dev/null 2>&1
+fi
+##################################################################################
+groupadd -r -g $USID $USNM                                                        > /dev/null 2>&1
+useradd -r -m -g $USNM -u $USID $USNM                                             > /dev/null 2>&1
+exitcode=$?
+if [ $exitcode == 0 ];then
+    echo $USNM|passwd --stdin $USNM                                               > /dev/null 2>&1
+fi
+id $USNM                                                                          > /dev/null 2>&1
+exitcode=$?
+if [ $exitcode != 0 ];then
+    echo "No such user:$USNM"
+    exit 4
+fi
+##################################################################################
+devices=${DEVC//./ }
+array=($devices)
+nametail=1
+for device in ${array[@]};do
+    if [ -d $device ];then
+        Directorys="$Directorys $device"
+    elif [ -e $device ];then
+        hasconfig=`cat /etc/fstab|grep -w "^$device"|wc -l`
+        if [ $hasconfig == 0 ];then
+            mkfs.xfs -f $device                                                   > /dev/null 2>&1
+            mkdir /data$nametail                                                  > /dev/null 2>&1
+            echo "$device /data$nametail xfs nodev,noatime,nobarrier,inode64 0 0" >> /etc/fstab
+            Directorys="$Directorys /data$nametail"
+        else
+            Directorys="$Directorys `cat /etc/fstab|grep -w "^$device"|head -n 1|awk '{print $2}'`"
+        fi
+    else
+        echo "Device or path not exists: $device."
+        exit 5
+    fi
+    nametail=$((nametail + 1))
+done
+mount -a                                                                          > /dev/null 2>&1
+##################################################################################
+array=($Directorys)
+for path in ${array[@]};do
+    if [ $MODE == "M" ];then
+        mkdir -p $path/master/{default,gpfs}                                      > /dev/null 2>&1
+        chown -R $USNM. $path/master                                              > /dev/null 2>&1
+    elif [ $MODE == "S" ];then
+        mkdir -p $path/{primary,mirror}/{default,gpfs}                            > /dev/null 2>&1
+        chown -R $USNM. $path/{primary,mirror}                                    > /dev/null 2>&1
+    fi
+done
+##################################################################################
+if [ $MODE == "M" ];then
+    array=($Directorys)
+    masterpath=${array[0]}
+    sed -e /greenplum_path.sh/d                                            -i /home/gpadmin/.bashrc
+    sed -e /MASTER_DATA_DIRECTORY/d                                        -i /home/gpadmin/.bashrc
+    echo '. /usr/local/greenplum-db/greenplum_path.sh'                     >> /home/gpadmin/.bashrc
+    echo "export MASTER_DATA_DIRECTORY=$masterpath/master/default/gpseg-1" >> /home/gpadmin/.bashrc
+fi
+##################################################################################
+echo "####----"$Directorys
+##################################################################################
+____CONFIG_COMMAND_SHELL_END____
+=cut
