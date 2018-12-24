@@ -25,3 +25,7 @@ gpdbcluster命令暂未经过大规模验证
 目前已经强化了Standby激活的逻辑，如果无法判断Master的状态就不切换，    
 因为，如果gpactivatestandby命令本身也无法判断Master状态的话，    
 可能会出现Master和Standby都活着的冲突状态    
+    
+    
+    
+    
