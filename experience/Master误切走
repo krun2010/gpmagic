@@ -1,0 +1,24 @@
+如果Master被误切走，但不清楚当时的Standby状态是否与Master完全一致，
+尤其是当激活Standby时使用了force选项，
+此时可能希望让老的Master继续作为Master使用，
+即，如何把老的Master重新启用的方法：
+【亲测4版本和5版本都奏效】
+原理：
+[gpadmin@sdw001 ~]$ pg_controldata $MASTER_DATA_DIRECTORY
+......
+Latest checkpoint's TimeLineID:       1
+......
+正常情况下，Master和Standby的这个值都是1，成功执行了gpactivatestandby命令之后，原来的Standby的
+这个值变为2，于是在老的Master上继续执行gpstart时，会报如下错误：
+Standby activated, this node no more can act as master.
+因为正常启动时，启动命令会检查Standby的TimeLineID的值，如果Standby的TimeLineID值比Master的大，
+就说明Standby被激活了，就不让启动了，因此，我们只需要假装把Standby干掉就好了。
+
+1、登录原来的Standby上[激活后的Master]
+    a、执行gpstop -af命令，把集群停掉
+    b、把数据目录重命名[以备不时之需]，这里一定要用重命名，不要删除，以防万一！！！
+2、登录原来的Master
+    a、执行gpstart -am命令，把被切走的Master用master only模式启动起来
+    b、执行gpinitstandby -r命令把旧的standby配置清理掉
+    c、执行gpstop -afm命令停掉老的master
+    d、正常执行gpstart -a，此时可以正常启动老master的集群了
