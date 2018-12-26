@@ -932,7 +932,7 @@ sub outputTable{
             $relhasoids,$relhaspkey,$relhasrules,$relhassubclass,$relacl,$reloptions) = @{$MAP_OF_TABLE{$oid}};
         if(isTempSchema($relnamespace) || exists $MAP_OF_PARTITION_OID{$oid}){
             next;
-        }elsif(!exists $MAP_OF_ATTRIBUTE{$oid."-"."1"} && !exists $MAP_OF_ATTRIBUTE{$oid."-".$relnatts}){
+        }elsif(!exists $MAP_OF_ATTRIBUTE{$oid."-"."1"} || !exists $MAP_OF_ATTRIBUTE{$oid."-".$relnatts}){
             outwarn("Table $relnamespace.$relname missing attributes");
             next;
         }elsif(!exists $MAP_OF_DISTRIBUTION{$oid}){
@@ -1008,7 +1008,7 @@ sub outputExtTable{
         ($relname,$relacl,$relnamespace) = (quote(decode($relname)),decode($relacl),$MAP_OF_SCHEMA{$relnamespace});
         if(isTempSchema($relnamespace)){
             next;
-        }elsif(!exists $MAP_OF_ATTRIBUTE{$oid."-"."1"} && !exists $MAP_OF_ATTRIBUTE{$oid."-".$relnatts}){
+        }elsif(!exists $MAP_OF_ATTRIBUTE{$oid."-"."1"} || !exists $MAP_OF_ATTRIBUTE{$oid."-".$relnatts}){
             outwarn("External table $relnamespace.$relname missing attributes");
             next;
         }
