@@ -1,0 +1,561 @@
+#!/usr/bin/perl
+use strict;
+use MIME::Base64;
+use File::Basename;
+use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
+use POSIX;
+
+my ($ROLE_MASTER,$ROLE_STANDBY,$ROLE_STATE) = ("Master",'Standby',"Unknow");
+my ($STANDBY_HAS,$STANDBY_NO,$STANDBY_STATE) = ("Configued","Unconfigued","Unknow");
+my ($SYNC_OK,$SYNC_ERROR,$SYNC_STATE) = ("Sync","Unsync","Unknow");
+my ($MASTER_OK,$MASTER_ERROR,$MASTER_STATE) = ("Normal","Error","Unknow");
+my ($SQL_TIMEOUT,$COMMAND_TIMEOUT,$CHECK_INTERVAL) = (10,300,20);
+my (@SEGMENT_HOSTS_ARRAY);
+my ($MASTER_HOST,$STANDBY_HOST,$MASTER_DATA_DIRECTORY,$PGUSER,$PGPORT,$VIRTUAL_IP,$FORCE_REBOOT,$START,$STOP,$STATUS,$RESOURCE,$VERBOSE,$IS_HELP,$VERSION);
+
+my ($LOG_FILE_DATE,$LOG_FILE_HANDLE);
+(my $CMD_NAME = $0) =~ s!.*/(.*)!$1!;
+my $CMD_PATH = dirname(__FILE__);
+my $MAIN_PID = substr("000000".$$,-6);
+
+my $HELP_MESSAGE = qq#COMMAND NAME: $CMD_NAME
+Auto switch master and standby role.
+
+Developed by Miao Chen
+
+Work Email:
+michen\@pivotal.io
+Private Email:
+miaochen\@mail.ustc.edu.cn
+
+************************************************************************************************
+SYNOPSIS
+************************************************************************************************
+$CMD_NAME [-u gp admin user]
+    [-p master port]
+    [--vip virtual ip address]
+    [--force-reboot]
+    [--start]
+    [--stop]
+    [--status]
+    [--resource]
+    [-v]
+    [-h|--help]
+    [--version]
+*****************************************************
+DESCRIPTION
+*****************************************************
+The $CMD_NAME utility is used to auto switch role between master and standby.
+You can execute some test before run in production environment.
+
+When you run it in production environment, you should submit it to backend.
+
+Before you run this command, you must make sure {gpuser} can use psql to access local master!
+
+Command will log message to log file on path /home/{gpuser}/gpAdminLogs/${CMD_NAME}_{DATE_FLAG}.log.
+*****************************************************
+OPTIONS
+*****************************************************
+
+-u <gp admin user>
+
+  Database admin user's name, the default is gpadmin.
+  eg.:
+  -u gpadmin
+
+-p <master port>
+
+  Database port which master used, the default is 5432.
+  eg.:
+  -p 5432
+  
+--vip <virtual ip address>
+
+  You should specify it as format:
+  IP:MASK:DEV
+  eg.:
+  192.168.1.254:24:eth0
+
+--force-reboot
+
+  Specify it, standby will try to force reboot master host when master status is error. 
+
+--start
+
+  Start $CMD_NAME utility and auto switch to backend runnning.
+
+--stop
+
+  Stop $CMD_NAME utility, will try to clean auto switch progress on Master and Standby.
+
+--status
+
+  Show cluster's last status from log file.
+
+--resource
+
+  Specify a command which will be executed when cluster try to start or stop or activate GP master with parameter START or STOP.
+
+-v (verbose output)
+
+  Displays detailed status, progress and error messages output by the utility.
+
+-h|--help
+  Displays the online help.
+
+--version
+
+  Displays the command version.
+
+Examples:
+$CMD_NAME --vip '192.168.88.123:24:eth0' -v --start
+$CMD_NAME --status
+$CMD_NAME --vip '192.168.88.123:24:eth0' --stop
+#;
+
+sub trim{
+    my ($string) = @_;
+    $string =~ s/(^\s+|\s+$)//g;
+    return $string;
+}
+sub encode{
+    my ($string) = @_;
+    my $encode = encode_base64($string);
+    $encode =~ s/\n//g;
+    return $encode;
+}
+sub decode{
+    return decode_base64($_[0]);
+}
+sub printMessage{
+    my ($flag,$message) = @_;
+    my $time_flag = strftime("%Y%m%d:%H:%M:%S.",localtime).$MAIN_PID;
+    $message = "$time_flag-[$flag]-:$message\n";
+    if("ERROR" eq $flag){
+        print STDERR $message;
+    }else{
+        print STDOUT $message;
+    }
+    return $message;
+}
+sub logMessage{
+    my ($flag,$message) = @_;
+    my $log_message = printMessage($flag,$message);
+    my $log_file_date = strftime("%Y%m%d",localtime);
+    if($log_file_date ne $LOG_FILE_DATE){
+        if($LOG_FILE_HANDLE != ""){
+            close($LOG_FILE_HANDLE);
+        }
+        $LOG_FILE_DATE = $log_file_date;
+        open($LOG_FILE_HANDLE,">>","/home/$PGUSER/gpAdminLogs/${CMD_NAME}_$LOG_FILE_DATE.log");
+    }
+    print $LOG_FILE_HANDLE $log_message;
+}
+sub errorMessage{
+    my ($message) = @_;
+    logMessage("ERROR",$message);
+    print "Usage: $CMD_NAME [-h|--help] [options]\n";
+    exit 1;
+}
+sub getOption{
+    GetOptions(
+        'm:s'           => \$MASTER_HOST,
+        's:s'           => \$STANDBY_HOST,
+        'd:s'           => \$MASTER_DATA_DIRECTORY,
+        'u:s'           => \$PGUSER,
+        'p:i'           => \$PGPORT,
+        'vip:s'         => \$VIRTUAL_IP,
+        'force-reboot!' => \$FORCE_REBOOT,
+        'start!'        => \$START,
+        'stop!'         => \$STOP,
+        'status!'       => \$STATUS,
+        'resource:s'    => \$RESOURCE,
+        'v!'            => \$VERBOSE,
+        'h|help!'       => \$IS_HELP,
+        'version!'      => \$VERSION,
+    );
+    if(@ARGV != 0){
+        errorMessage("Some parameters unknown: [@ARGV]\nPlease refer to $CMD_NAME --help");
+    }
+    if($IS_HELP){
+        print $HELP_MESSAGE;
+        exit 0;
+    }
+    if($VERSION){
+        print "$CMD_NAME 1.0\n";
+        exit 0;
+    }
+}
+sub checkOption{
+    if("" eq $PGUSER){
+        $PGUSER = "gpadmin";
+        logMessage("NOTICE","Not specify -u, use default($PGUSER)");
+    }
+    if("" eq $PGPORT){
+        $PGPORT = "5432";
+        logMessage("NOTICE","Not specify -p, use default($PGPORT)");
+    }
+    if($RESOURCE =~ /^Base64/){
+        $RESOURCE = decode(substr($RESOURCE,6));
+    }
+}
+sub firstCheck{
+    my $output = trim(readpipe(qq{cat /etc/sudoers|grep 'Defaults.*requiretty'}));
+    if($output ne "" && !($output =~ /^#/)){
+        errorMessage("You should modify the /etc/sudoers file to disable require tty like:\n#Defaults    requiretty");
+    }
+    $output = trim(readpipe(qq{timeout -s 9 $SQL_TIMEOUT sudo -u $PGUSER sh -c "cd;. ~/.bashrc;psql -qtAX template1 -c 'select 0' 2>&1"}));
+    my $exit_code = $? >> 8;
+    if($exit_code == 0){
+        logMessage("INFO","Current host is Master");
+        $ROLE_STATE = $ROLE_MASTER;
+    }else{
+        if($output =~ /psql: FATAL:.+starting/){
+            logMessage("INFO","Current host is Standby");
+            $ROLE_STATE = $ROLE_STANDBY;
+        }else{
+            errorMessage("Try to access master occur error, exit:\n".$output);
+        }
+    }
+    if($ROLE_STATE eq $ROLE_MASTER){
+        $output = readpipe(qq{sudo -u $PGUSER sh -c "cd;. ~/.bashrc;psql -qtAX template1 <<EOF
+SHOW data_directory;
+SHOW port;
+SELECT hostname from gp_segment_configuration where content = -1 and role = 'p';
+SELECT hostname from gp_segment_configuration where content = -1 and role = 'm';
+EOF"});
+        my ($master_data_directory,$pgport,$master_host,$standby_host) = split(/\n/,$output);
+        logMessage("INFO","Information from cluster :: master_host: $master_host, standby_host: $standby_host, master_data_directory: $master_data_directory, master_port: $pgport");
+        $MASTER_HOST = $MASTER_HOST eq "" ? $master_host : $MASTER_HOST;
+        $STANDBY_HOST = $STANDBY_HOST eq "" ? $standby_host : $STANDBY_HOST;
+        $MASTER_DATA_DIRECTORY = $MASTER_DATA_DIRECTORY eq "" ? $master_data_directory : $MASTER_DATA_DIRECTORY;
+        $PGPORT = $PGPORT eq "" ? $pgport : $PGPORT;
+        logMessage("INFO","Information used :: master_host: $MASTER_HOST, standby_host: $STANDBY_HOST, master_data_directory: $MASTER_DATA_DIRECTORY, master_port: $PGPORT");
+    }elsif($ROLE_STATE eq $ROLE_STANDBY){
+        $output = readpipe(qq{sudo -u $PGUSER ssh $MASTER_HOST -T "cd;. ~/.bashrc;psql -qtAX -p $PGPORT template1 <<EOF
+SELECT distinct hostname from gp_segment_configuration where content > -1 order by random() limit 5;
+EOF"});
+        @SEGMENT_HOSTS_ARRAY = split(/\n/,trim($output));
+    }
+    if($MASTER_HOST eq "" || $MASTER_DATA_DIRECTORY eq "" || $PGPORT eq ""){
+        errorMessage("Failed to start cluster for some parameter is blank :: master_host: $MASTER_HOST, master_data_directory: $MASTER_DATA_DIRECTORY, master_port: $PGPORT");
+    }
+    if($STANDBY_HOST eq ""){
+        $STANDBY_STATE = $STANDBY_NO;
+        logMessage("WARN","No standby configued");
+    }
+    if($ROLE_STATE eq $ROLE_MASTER){
+        executeResource($MASTER_HOST,"START");
+        if($STANDBY_HOST ne ""){
+            executeResource($STANDBY_HOST,"STOP");
+        }
+    }
+}
+sub stopProgress{
+    logMessage("INFO","Try to stop exists progress");
+    my $current_pid = int($MAIN_PID);
+    my $pid_check = qq{ps ax|grep -w $CMD_NAME|grep -vw grep|grep -vw $current_pid|head -n 1|}.q(awk '{print $1}');
+    for my $times(1 .. 3){
+        my $pid = trim(readpipe($pid_check));
+        if("" eq $pid && $times == 1){
+            logMessage("WARN","No progress on Master host");
+            last;
+        }
+        if("" ne $pid){
+            system(qq{kill $pid});
+        }else{
+            last;
+        }
+    }
+    my $pid = trim(readpipe($pid_check));
+    if("" ne $pid){
+        errorMessage("Failed clean progress on Master host: $MASTER_HOST");
+    }else{
+        logMessage("INFO","Success stop progress on Master host: $MASTER_HOST");
+    }
+    if($ROLE_STATE eq $ROLE_STANDBY){
+        return;
+    }
+    if("" ne $STANDBY_HOST){
+        $pid_check = qq{ssh $STANDBY_HOST -T "ps ax|grep -w $CMD_NAME|grep -vw grep|head -n 1"|}.q(awk '{print $1}');
+        for my $times(1 .. 3){
+            my $pid = trim(readpipe($pid_check));
+            if("" ne $pid){
+                system(qq{ssh $STANDBY_HOST -T "kill $pid"});
+            }else{
+                last;
+            }
+        }
+        my $pid = trim(readpipe($pid_check));
+        if("" ne $pid){
+            errorMessage("Failed clean progress on Standby host: $STANDBY_HOST");
+        }else{
+            logMessage("INFO","Success stop progress on Standby host: $STANDBY_HOST");
+        }
+    }else{
+        logMessage("INFO","No standby progress should clean");
+    }
+}
+sub setVirtualIP{
+    my ($vip,$vmask,$vdev) = split(/:/,$VIRTUAL_IP);
+    if($ROLE_STATE eq $ROLE_MASTER && $VIRTUAL_IP ne ""){
+        logMessage("INFO","Try to add virtual ipaddress: ip addr add $vip/$vmask dev $vdev");
+        system(qq{ip addr add $vip/$vmask dev $vdev});
+    }elsif($ROLE_STATE eq $ROLE_STANDBY && $VIRTUAL_IP ne ""){
+        my $output = trim(readpipe(qq(ip a|grep -w $vip|sed s'./. .'|awk '{print \$2":"\$3":"\$6}')));
+        if($output ne ""){
+            my ($curr_ip,$curr_mask,$curr_dev) = split(/:/,$output);
+            logMessage("INFO","Try to delete virtual ipaddress: ip addr del $curr_ip/$curr_mask dev $curr_dev");
+            system(qq{ip addr del $curr_ip/$curr_mask dev $curr_dev});
+        }
+    }
+}
+sub initMaster{
+    my $boolean = $VERBOSE ? "-v" : "";
+    $boolean = $boolean.($FORCE_REBOOT ? "--force-reboot" : "");
+    my $resource = " --resource Base64".encode($RESOURCE);
+    my $command = qq{nohup $CMD_PATH/$CMD_NAME -m $MASTER_HOST -s $STANDBY_HOST -d $MASTER_DATA_DIRECTORY -u $PGUSER -p $PGPORT --vip '$VIRTUAL_IP' $resource $boolean 2>&1 > /dev/null &};
+    my $output = trim(readpipe($command));
+    my $exit_code = $? >> 8;
+    if($exit_code == 0){
+        logMessage("INFO","Start master cluster command success");
+        exit 0;
+    }else{
+        logMessage("WARN","Start master cluster command failed");
+        exit 1;
+    }
+}
+sub showStatus{
+    my $log_file = "~/gpAdminLogs/${CMD_NAME}_$LOG_FILE_DATE.log";
+    my $last_stat = readpipe(qq{sudo -u $PGUSER ssh $MASTER_HOST -T "cat $log_file|grep 'Current stats is'|tail -n 1"});
+    print "Master's last status is:\n".$last_stat."\n";
+    if("" ne $STANDBY_HOST){
+        $last_stat = readpipe(qq{sudo -u $PGUSER ssh $STANDBY_HOST -T "cat $log_file|grep 'Current stats is'|tail -n 1"});
+        print "Standby's last status is:\n".$last_stat."\n";
+    }
+}
+sub initStandby{
+    my $boolean = $VERBOSE ? "-v" : "";
+    $boolean = $boolean.($FORCE_REBOOT ? "--force-reboot" : "");
+    my $resource = " --resource Base64".encode($RESOURCE);
+    my $output = trim(readpipe(qq{scp $CMD_PATH/$CMD_NAME $STANDBY_HOST:/bin/$CMD_NAME;ssh $STANDBY_HOST -T "chmod 755 /bin/$CMD_NAME"}));
+    my $command = qq{ssh $STANDBY_HOST -T "nohup /bin/$CMD_NAME -m $MASTER_HOST -s $STANDBY_HOST -d $MASTER_DATA_DIRECTORY -u $PGUSER -p $PGPORT --vip '$VIRTUAL_IP' $resource $boolean 2>&1 > /dev/null &"};
+    $output = trim(readpipe($command));
+    my $exit_code = $? >> 8;
+    if($VERBOSE){
+        logMessage("INFO",$command);
+    }
+    if($exit_code == 0){
+        logMessage("INFO","Start standby cluster command success");
+        $STANDBY_STATE = $STANDBY_HAS;
+        $SYNC_STATE = $SYNC_OK;
+    }else{
+        logMessage("WARN","Start standby cluster command failed");
+    }
+}
+sub checkLMasterRStandby{
+    my $output = trim(readpipe(qq{timeout -s 9 $SQL_TIMEOUT sudo -u $PGUSER sh -c "cd;. ~/.bashrc;psql -qtAX -p $PGPORT template1 -c 'select 0' 2>&1 >/dev/null"}));
+    my $exit_code = $? >> 8;
+    if($exit_code == 0){
+        $MASTER_STATE = $MASTER_OK;
+        if($VERBOSE){
+            logMessage("INFO","Local Master status OK");
+        }
+    }else{
+        $MASTER_STATE = $MASTER_ERROR;
+        logMessage("WARN","Local Master status error:\n".$output);
+    }
+    my $rync_state = trim(readpipe(qq{sudo -u $PGUSER sh -c "cd;. ~/.bashrc;gpstate -f|grep 'Sync state: sync'|wc -l"}));
+    my $command = qq{sudo -u $PGUSER sh -c "cd;. ~/.bashrc;psql -qtAX -p $PGPORT template1 <<EOF
+SELECT hostname from gp_segment_configuration where content = -1 and role = 'm';
+EOF"};
+    if($rync_state eq "1"){
+        if($STANDBY_STATE ne $STANDBY_HAS){
+            $output = readpipe($command);
+            $STANDBY_HOST = trim($output);
+            initStandby();
+        }
+    }else{
+        $SYNC_STATE = $SYNC_ERROR;
+        $output = readpipe($command);
+        if("" eq trim($output)){
+            $STANDBY_STATE = $STANDBY_NO;
+        }
+    }
+}
+sub checkLStandbyRMaster{
+    my $output = trim(readpipe(qq{timeout -s 9 $SQL_TIMEOUT sudo -u $PGUSER ssh $MASTER_HOST -T "cd;. ~/.bashrc;psql -qtAX -p $PGPORT template1 -c 'select 0' 2>&1 > /dev/null"}));
+    my $exit_code = $? >> 8;
+    if($exit_code == 0){
+        $MASTER_STATE = $MASTER_OK;
+        if($VERBOSE){
+            logMessage("INFO","Remote Master status OK");
+        }
+    }else{
+        $MASTER_STATE = $MASTER_ERROR;
+        logMessage("WARN","Remote Master status error:\n".$output);
+    }
+}
+sub executeResource{
+    my ($hostname,$operation) = @_;
+    if($START || $STOP || $STATUS){
+        return;
+    }
+    if("" ne $RESOURCE){
+        my $output = readpipe(qq{timeout -s 9 $COMMAND_TIMEOUT ssh $hostname -T "$RESOURCE $operation"});
+        my $exit_code = $? >> 8;
+        if($exit_code == 0){
+            logMessage("INFO","Execute $RESOURCE $operation on $hostname success");
+        }else{
+            logMessage("WARN","Execute $RESOURCE $operation on $hostname occur error:\n".$output);
+        }
+    }
+}
+sub stopLMaster{
+    my $output = trim(readpipe(qq{sudo -u $PGUSER sh -c "cd;. ~/.bashrc;gpstop -amf"}));
+    my $exit_code = $? >> 8;
+    if($exit_code == 0){
+        logMessage("INFO","Stop Master success");
+        executeResource($MASTER_HOST,"STOP");
+    }else{
+        logMessage("WARN","Stop Master failed:\n$output");
+    }
+    $ROLE_STATE = $ROLE_STANDBY;
+    setVirtualIP();
+    exit 0;
+}
+sub stopRMaster{
+    my ($stopSuccess,$stopFailed) = (1,0);
+    my $output = trim(readpipe(qq{ping $MASTER_HOST -c 1 -w 1}));
+    my $exit_code = $? >> 8;
+    if($exit_code == 0){
+        if($FORCE_REBOOT){
+            logMessage("WARN","Remote master is still alive, try to force reboot it");
+            my $output = trim(readpipe(qq{timeout $COMMAND_TIMEOUT ssh $MASTER_HOST -T "nohup sh -c 'sleep 1;echo 1 > /proc/sys/kernel/sysrq;echo b > /proc/sysrq-trigger' 2>&1 > /dev/null &"}));
+            sleep 3;
+            $output = trim(readpipe(qq{ping $MASTER_HOST -c 1 -w 1}));
+            $exit_code = $? >> 8;
+            if($exit_code == 0){
+                logMessage("WARN","Faile to force reboot remote master, exit now");
+                exit 1;
+            }else{
+                return $stopSuccess;
+            }
+        }else{
+            logMessage("INFO","Remote master is still alive, try to stop master");
+            readpipe(qq{timeout $COMMAND_TIMEOUT sudo -u $PGUSER ssh $MASTER_HOST -T "cd;. ~/.bashrc;gpstop -amf"});
+            readpipe(qq{timeout $COMMAND_TIMEOUT sudo -u $PGUSER ssh $MASTER_HOST -T 'if [ `ps ax|grep postgres|grep -v grep|wc -l` > 0 ];then exit 1;fi;exit 0'});
+            $exit_code = $? >> 8;
+            if($exit_code == 0){
+                executeResource($MASTER_HOST,"STOP");
+                return $stopSuccess;
+            }else{
+                logMessage("WARN","Can't obtain master's status, to avoid conflict, can't continue to acvive standby, will try later");
+                return $stopFailed;
+            }
+        }
+    }else{
+        logMessage("WARN","Failed to ping remote Master Host, Try to from some segment host");
+        for my $segment(@SEGMENT_HOSTS_ARRAY){
+            $output = trim(readpipe(qq{timeout $COMMAND_TIMEOUT ssh $segment -T "ping $MASTER_HOST -c 1 -w 1"}));
+            $exit_code = $? >> 8;
+            if($exit_code == 0){
+                logMessage("WARN","Some segment host always can ping to master: $segment, exit now");
+                exit 1;
+            }
+        }
+        logMessage("WARN","Some segment host also can't ping to master: $segment, just believe it failed");
+        return $stopSuccess;
+    }
+}
+sub resyncStandby{
+    if($STANDBY_STATE eq $STANDBY_NO){
+        return;
+    }
+    my $rync_state = 0;
+    for my $times(1 .. 3){
+        system(qq{sudo -u $PGUSER sh -c "cd;. ~/.bashrc;gpinitstandby -a -n"});
+        my $rync_state = trim(readpipe(qq{sudo -u $PGUSER sh -c "cd;. ~/.bashrc;gpstate -f|grep 'Sync state: sync'|wc -l"}));
+        if($rync_state eq "1"){
+            $SYNC_STATE = $SYNC_OK;
+            last;
+        }else{
+            $SYNC_STATE = $SYNC_ERROR;
+        }
+        sleep 3;
+    }
+    if($SYNC_STATE eq $SYNC_ERROR){
+        system(qq{sudo -u $PGUSER sh -c "cd;. ~/.bashrc;gpinitstandby -a -r"});
+        system(qq{sudo -u $PGUSER sh -c "cd;. ~/.bashrc;gpinitstandby -a -s smdw"});
+    }
+}
+sub activeStandby{
+    for my $times(1 .. 3){
+        my $output = readpipe(qq{sudo -u $PGUSER sh -c "cd;. ~/.bashrc;export PGPORT=$PGPORT;gpactivatestandby -a -d $MASTER_DATA_DIRECTORY"});
+        my $exit_code = $? >> 8;
+        if($VERBOSE){
+            logMessage("INFO",qq{sudo -u $PGUSER sh -c "cd;. ~/.bashrc;export PGPORT=$PGPORT;gpactivatestandby -a -d $MASTER_DATA_DIRECTORY"});
+        }
+        if($exit_code != 0){
+            logMessage("WARN","Active standby occur error:\n".$output);
+            next;
+        }
+        system(qq{timeout -s 9 $SQL_TIMEOUT sudo -u $PGUSER sh -c "cd;. ~/.bashrc;psql -qtAX -p $PGPORT template1 -c 'select 0' 2>&1 > /dev/null"});
+        $exit_code = $? >> 8;
+        if($exit_code == 0){
+            $ROLE_STATE = $ROLE_MASTER;
+            $MASTER_STATE = $MASTER_OK;
+            my $old_master_host = $MASTER_HOST;$MASTER_HOST = $STANDBY_HOST;$STANDBY_HOST = $old_master_host;
+            $STANDBY_STATE = $STANDBY_NO;
+            setVirtualIP();
+            executeResource($MASTER_HOST,"START");
+            last;
+        }
+        sleep 3;
+    }
+}
+sub main{
+    getOption();
+    checkOption();
+    logMessage("INFO","Run command: ".$_[0]);
+    my $username = trim(readpipe("whoami"));
+    if($username ne "root"){
+        errorMessage("You must run this command with root user");
+    }
+    firstCheck();
+    if($STATUS){
+        showStatus();
+        exit 0;
+    }
+    stopProgress();
+    if($START){
+        initMaster();
+    }elsif($STOP){
+        exit 0;
+    }
+    setVirtualIP();
+    while(1){
+        if($ROLE_STATE eq $ROLE_MASTER){
+            checkLMasterRStandby();
+            if($MASTER_STATE eq $MASTER_ERROR){
+                stopLMaster();
+            }elsif($SYNC_STATE eq $SYNC_ERROR){
+                resyncStandby();
+            }
+            logMessage("INFO","Current stats is :: role_state: $ROLE_STATE, master state: $MASTER_STATE, standby state: $STANDBY_STATE, sync_state: $SYNC_STATE");
+        }elsif($ROLE_STATE eq $ROLE_STANDBY){
+            checkLStandbyRMaster();
+            if($MASTER_STATE eq $MASTER_ERROR){
+                my $stopSuccess = stopRMaster();
+                if($stopSuccess){
+                    activeStandby();
+                }
+            }
+            logMessage("INFO","Current stats is :: role_state: $ROLE_STATE, master state: $MASTER_STATE");
+        }
+        sleep $CHECK_INTERVAL;
+    }
+}
+my $command_string = $0." ".join(" ",@ARGV);
+$| = 1;
+main($command_string);

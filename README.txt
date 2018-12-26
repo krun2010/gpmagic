@@ -19,3 +19,13 @@ gpdbtransfer
 [gpadmin@mdw bin]$ chown gpadmin. gpdbtransfer  
 [gpadmin@mdw bin]$ chmod 755 gpdbtransfer  
 使用说明可以参考命令的help信息和word文档  
+
+gpdbcluster命令暂未经过大规模验证    
+建议慎重用于生产环境    
+目前已经强化了Standby激活的逻辑，如果无法判断Master的状态就不切换，    
+因为，如果gpactivatestandby命令本身也无法判断Master状态的话，    
+可能会出现Master和Standby都活着的冲突状态    
+    
+    
+    
+    
