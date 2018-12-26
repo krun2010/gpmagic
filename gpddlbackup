@@ -209,6 +209,9 @@ sub output{
         print trim($_[0])."\n";
     }
 }
+sub outwarn{
+    print STDERR trim($_[0])."\n";
+}
 sub encode{
     my ($string) = @_;
     my $encode = encode_base64($string);
@@ -535,15 +538,22 @@ sub getAttributeInformation{
     @result = queryResult($SQL_GET_DISTRIBUTION);
     for my $row(@result){
         my ($localoid,$attrnums) = @$row;
+        my $attenough = 1;
         my @diskeys_array = ();
         if("" ne $attrnums){
             for my $attr(split(/,/,$attrnums)){
                 my $key = $localoid."-".$attr;
+                if(!exists $MAP_OF_ATTRIBUTE{$key}){
+                    outwarn("Table with oid $localoid has no attribute with attnum $attr");
+                    $attenough = 0;last;
+                }
                 my ($attname,$atttype,$attstattarget,$attstorage,$attnotnull,$atthasdef,$attisdropped) = @{$MAP_OF_ATTRIBUTE{$key}};
                 push @diskeys_array,$attname;
             }
         }
-        $MAP_OF_DISTRIBUTION{$localoid} = join(",",@diskeys_array);
+        if($attenough){
+            $MAP_OF_DISTRIBUTION{$localoid} = join(",",@diskeys_array);
+        }
     }
 }
 sub outputCompType{
@@ -920,10 +930,13 @@ sub outputTable{
     for my $oid(keys %MAP_OF_TABLE){
         my ($relname,$relnamespace,$relowner,$reltablespace,$relhasindex,$relnatts,$relchecks,
             $relhasoids,$relhaspkey,$relhasrules,$relhassubclass,$relacl,$reloptions) = @{$MAP_OF_TABLE{$oid}};
-        if(isTempSchema($relnamespace) || !exists $MAP_OF_ATTRIBUTE{$oid."-"."1"} || !exists $MAP_OF_DISTRIBUTION{$oid}){
+        if(isTempSchema($relnamespace) || exists $MAP_OF_PARTITION_OID{$oid}){
             next;
-        }
-        if(exists $MAP_OF_PARTITION_OID{$oid}){
+        }elsif(!exists $MAP_OF_ATTRIBUTE{$oid."-"."1"} && !exists $MAP_OF_ATTRIBUTE{$oid."-".$relnatts}){
+            outwarn("Table $relnamespace.$relname missing attributes");
+            next;
+        }elsif(!exists $MAP_OF_DISTRIBUTION{$oid}){
+            outwarn("Table $relnamespace.$relname has no correct distribution key");
             next;
         }
         if($begin == 0){
@@ -993,7 +1006,10 @@ sub outputExtTable{
     for my $row(@result){
         my ($oid,$relname,$relnamespace,$relowner,$relnatts,$relacl) = @$row;
         ($relname,$relacl,$relnamespace) = (quote(decode($relname)),decode($relacl),$MAP_OF_SCHEMA{$relnamespace});
-        if(isTempSchema($relnamespace) || !exists $MAP_OF_ATTRIBUTE{$oid."-"."1"}){
+        if(isTempSchema($relnamespace)){
+            next;
+        }elsif(!exists $MAP_OF_ATTRIBUTE{$oid."-"."1"} && !exists $MAP_OF_ATTRIBUTE{$oid."-".$relnatts}){
+            outwarn("External table $relnamespace.$relname missing attributes");
             next;
         }
         if($begin == 0){
@@ -1163,6 +1179,7 @@ sub outputIndex{
         my ($relid,$relnamespace,$indexdef) = @$row;
         $relnamespace = $MAP_OF_SCHEMA{$relnamespace};
         if(!exists $MAP_OF_TABLE{$relid}){
+            outwarn("Index with oid $relid missing table information");
             next;
         }
         my ($relname,$nspname) = @{$MAP_OF_TABLE{$relid}};
