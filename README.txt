@@ -26,6 +26,6 @@ gpdbcluster命令暂未经过大规模验证
 因为，如果gpactivatestandby命令本身也无法判断Master状态的话，    
 可能会出现Master和Standby都活着的冲突状态    
     
-    
+gpddlbackup可能还有不足之处，如果在使用过程中有异常退出现象，请联系本人修正    
     
     
