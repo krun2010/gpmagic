@@ -22,3 +22,6 @@ Standby activated, this node no more can act as master.
     b、执行gpinitstandby -r命令把旧的standby配置清理掉
     c、执行gpstop -afm命令停掉老的master
     d、正常执行gpstart -a，此时可以正常启动老master的集群了
+    
+    
+    
