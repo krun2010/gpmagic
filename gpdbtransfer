@@ -1281,7 +1281,11 @@ sub getAOLastStatFromCatalog{
         my ($ao,$scma,$rel,$typ,$tim) = @$row;
         $all_index += 1;
         if($typ eq "a"){
-            push @query_array,"select '$scma','$rel',coalesce(sum(modcount),0) from pg_aoseg.$ao";
+            if("" eq $ao){
+                logMessage("WARN","AO table $scma.$rel missing aoseg table, it may be transfer always and may occur error");
+            }else{
+                push @query_array,"select '$scma','$rel',coalesce(sum(modcount),0) from pg_aoseg.$ao";
+            }
             $ao_index += 1;
         }
         if($ao_index == $SQL_BATCH || $all_index == @TABLE_ARRAY){
@@ -1314,7 +1318,7 @@ sub getHeapLastStatFromCatalog{
             push @query_array,$query_sql;
             $heap_index += 1;
         }
-        if($heap_index ==100 || $all_index == @TABLE_ARRAY){
+        if($heap_index == 100 || $all_index == @TABLE_ARRAY){
             for my $row(queryResult("SRC",join("\nUNION ALL\n",@query_array))){
                 my ($c_scma,$c_rel,$md5) = @$row;
                 my $table = $c_scma.".".$c_rel;
