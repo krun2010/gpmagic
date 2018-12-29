@@ -919,8 +919,8 @@ sub checkOption{
         $FORCE = "";
     }
     $GLOBAL_CONDITION="" ne $GLOBAL_CONDITION ? " where ".$GLOBAL_CONDITION : "";
-    logMessage("INFO","Option values: --src-host $SRC_HOST --src-port $SRC_PORT --src-user $SRC_USER --src-passwd $SRC_PASSWD --src-database $SRC_DATABASE");
-    logMessage("INFO","Option values: --dest-host $DEST_HOST --dest-port $DEST_PORT --dest-user $DEST_USER --dest-passwd $DEST_PASSWD --dest-database $DEST_DATABASE");
+    logMessage("INFO","Option values: --src-host $SRC_HOST --src-port $SRC_PORT --src-user $SRC_USER --src-passwd ****** --src-database $SRC_DATABASE");
+    logMessage("INFO","Option values: --dest-host $DEST_HOST --dest-port $DEST_PORT --dest-user $DEST_USER --dest-passwd ****** --dest-database $DEST_DATABASE");
     logMessage("INFO","Option values: --key $KEY --src-mapfile $SRC_MAPFILE --by-leaf $BY_LEAF --force $FORCE --owner $FORCE_OWNER --from-master $MASTER_ONLY");
     logMessage("INFO","Option values: -t ".join(' -t ',@TABLE_ARRAY)." -T ".join(' -T ',@EX_TABLE_ARRAY));
     logMessage("INFO","Option values: -f $TABLE_FILE -F $EX_TABLE_FILE");
