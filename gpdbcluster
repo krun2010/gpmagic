@@ -9,7 +9,7 @@ my ($ROLE_MASTER,$ROLE_STANDBY,$ROLE_STATE) = ("Master",'Standby',"Unknow");
 my ($STANDBY_HAS,$STANDBY_NO,$STANDBY_STATE,$STOPMASTER_TIMES) = ("Configued","Unconfigued","Unknow",0);
 my ($SYNC_OK,$SYNC_ERROR,$SYNC_STATE,$RESYNC_TIMES) = ("Sync","Unsync","Unknow",0);
 my ($MASTER_OK,$MASTER_ERROR,$MASTER_STATE) = ("Normal","Error","Unknow");
-my ($SQL_TIMEOUT,$COMMAND_TIMEOUT,$CHECK_INTERVAL) = (10,300,20);
+my ($SQL_TIMEOUT,$SQL_SLEEP,$COMMAND_TIMEOUT,$CHECK_INTERVAL) = (50,30,300,1);
 my ($PRESQL) = ("cd;. ~/.bashrc > /dev/null 2>&1");
 my (@SEGMENT_HOSTS_ARRAY);
 my ($MASTER_HOST,$STANDBY_HOST,$MASTER_DATA_DIRECTORY,$PGUSER,$PGPORT,$VIRTUAL_IP,$FORCE_REBOOT,$START,$STOP,$STATUS,$RESOURCE,$VERBOSE,$IS_HELP,$VERSION);
@@ -160,9 +160,6 @@ sub errorMessage{
 }
 sub executeCommand{
     my ($command) = @_;
-    if($VERBOSE){
-        logMessage("INFO","Execute command:\n".$command);
-    }
     my $output = readpipe($command);
     my $exit_code = $? >> 8;
     $output = trim($output);
@@ -170,6 +167,32 @@ sub executeCommand{
         logMessage("WARN","Execute command:\n".$command."\nOccur error:\n".$output);
     }
     return ($output,$exit_code);
+}
+sub masterStatus{
+    my ($remote,$once) = @_;
+    my ($try_from,$try_to) = (1,4);
+    if("" ne $once){
+        $try_from = $try_to;
+    }
+    my ($output,$code);
+    for my $trys($try_from .. $try_to){
+        my $checkCommand = "$PRESQL;psql -qtAX -p $PGPORT template1 -c 'select pg_sleep($SQL_SLEEP);'";
+        if($trys > 1){
+            $checkCommand = "$PRESQL;psql -qtAX -p $PGPORT template1 -c 'select 1;'";
+        }
+        if("" eq $remote){
+            ($output,$code) = executeCommand(qq{timeout -s 9 $SQL_TIMEOUT sudo -u $PGUSER sh -c               "$checkCommand" 2>&1});
+        }else{
+            ($output,$code) = executeCommand(qq{timeout -s 9 $SQL_TIMEOUT sudo -u $PGUSER ssh $MASTER_HOST -T "$checkCommand" 2>&1});
+        }
+        if($code == 0){
+            return ($output,$code);
+        }elsif($trys < $try_to){
+            logMessage("NOTICE","Check master status occur error, will try again");
+            sleep(1);
+        }
+    }
+    return ($output,$code);
 }
 sub getOption{
     GetOptions(
@@ -214,11 +237,11 @@ sub checkOption{
     }
 }
 sub firstCheck{
-    my ($output,$code) = executeCommand(qq{cat /etc/sudoers|grep 'Defaults.*requiretty'});
+    my ($output,$code) = executeCommand(qq{cat /etc/sudoers|grep 'Defaults.*requiretty'|tee});
     if($output ne "" && !($output =~ /^#/)){
         errorMessage("You should modify the /etc/sudoers file to disable require tty like:\n#Defaults    requiretty");
     }
-    ($output,$code) = executeCommand(qq{timeout -s 9 $SQL_TIMEOUT sudo -u $PGUSER sh -c "$PRESQL;psql -qtAX template1 -c 'select 0'" 2>&1});
+    ($output,$code) = masterStatus("","1");
     if($code == 0){
         logMessage("INFO","Current host is Master");
         $ROLE_STATE = $ROLE_MASTER;
@@ -365,7 +388,7 @@ sub initStandby{
     }
 }
 sub checkLMasterRStandby{
-    my ($output,$code) = executeCommand(qq{timeout -s 9 $SQL_TIMEOUT sudo -u $PGUSER sh -c "$PRESQL;psql -qtAX -p $PGPORT template1 -c 'select 0'" 2>&1});
+    my ($output,$code) = masterStatus("","");
     if($code == 0){
         $MASTER_STATE = $MASTER_OK;
         if($VERBOSE){
@@ -394,7 +417,7 @@ EOF"};
     }
 }
 sub checkLStandbyRMaster{
-    my ($output,$code) = executeCommand(qq{timeout -s 9 $SQL_TIMEOUT sudo -u $PGUSER ssh $MASTER_HOST -T "$PRESQL;psql -qtAX -p $PGPORT template1 -c 'select 0'" 2>&1});
+    my ($output,$code) = masterStatus("1","");
     if($code == 0){
         $MASTER_STATE = $MASTER_OK;
         if($VERBOSE){
@@ -493,7 +516,7 @@ sub activeStandby{
         logMessage("WARN","Active standby occur error:\n".$output);
         return;
     }
-    ($output,$code) = executeCommand(qq{timeout -s 9 $SQL_TIMEOUT sudo -u $PGUSER sh -c "$PRESQL;psql -qtAX -p $PGPORT template1 -c 'select 0' > /dev/null 2>&1"});
+    my ($output,$code) = masterStatus("","1");
     if($code == 0){
         $ROLE_STATE = $ROLE_MASTER;
         $MASTER_STATE = $MASTER_OK;
@@ -553,6 +576,7 @@ sub main{
                     my $stopSuccess = stopRMaster();
                     $STOPMASTER_TIMES += 1;
                     if($stopSuccess){
+                        logMessage("WARN","Remote master does not running now, try to activate standby...");
                         activeStandby();
                     }
                 }
