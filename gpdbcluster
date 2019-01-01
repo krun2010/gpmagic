@@ -185,6 +185,10 @@ sub masterStatus{
         }else{
             ($output,$code) = executeCommand(qq{timeout -s 9 $SQL_TIMEOUT sudo -u $PGUSER ssh $MASTER_HOST -T "$checkCommand" 2>&1});
         }
+        if($output =~ /FATAL:.*too many clients/ || $output =~ /FATAL:.*too many connections/){
+            logMessage("WARN","Occur too many connections error, will ignore it, please check the database status");
+            $code = 0;
+        }
         if($code == 0){
             return ($output,$code);
         }elsif($trys < $try_to){
