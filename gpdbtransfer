@@ -847,7 +847,7 @@ sub checkOption{
         $LOG_PATH = $LOG_PATH_DEFAULT;
         logMessage("NOTICE","Log path not specify, Use default log path:$LOG_PATH");
     }
-    system("mkdir -p $LOG_PATH");
+    system("mkdir -m 777 -p $LOG_PATH");
     my $log_file = $LOG_PATH."/gpdbtransfer_".(strftime("%Y%m%d",localtime)).".log";
     if(!open($LOG_FILE_HANDLE,">>",$log_file)){
         errorMessage("Can't open file:$log_file");
@@ -1036,9 +1036,9 @@ sub checkDestCluster{
     }else{
         logMessage("INFO","DEST function gp_toolkit.gp_transfer_execute is OK");
     }
-    my $mkdir_master_sql = qq{select gp_toolkit.gp_transfer_execute('mkdir -p /tmp/fifo');};
+    my $mkdir_master_sql = qq{select gp_toolkit.gp_transfer_execute('mkdir -m 777 -p /tmp/fifo');};
     queryResult("DEST",$mkdir_master_sql,"Scalar");
-    my $mkdir_segment_sql = qq{select gp_toolkit.gp_transfer_execute('mkdir -p /tmp/fifo') from gp_dist_random('gp_id');};
+    my $mkdir_segment_sql = qq{select gp_toolkit.gp_transfer_execute('mkdir -m 777 -p /tmp/fifo') from gp_dist_random('gp_id');};
     queryResult("DEST",$mkdir_segment_sql,"Scalar");
 }
 sub generateSrcHostMap{
@@ -1374,7 +1374,7 @@ sub processLastTransferStat{
     @TABLE_ARRAY = @temp_table_array;
 }
 sub checkConflictProcess{
-    system(qq{mkdir -p /tmp/fifo});
+    system(qq{mkdir -m 777 -p /tmp/fifo});
     my $lock_file = "/tmp/fifo/.gpdbtransfer.$KEY.lock";
     if(!open($LOCK_FILE_HANDLE,">",$lock_file)){
         errorMessage("Can't open lock file: $lock_file");
