@@ -1,0 +1,101 @@
+CREATE OR REPLACE FUNCTION gp_toolkit.gp_table_file_info() RETURNS SETOF VARCHAR[] AS $$
+import os
+_rslt = plpy.execute("""select current_database() dbname, inet_server_port() port;""")
+(_dbname, _port) = (_rslt[0]["dbname"], _rslt[0]["port"])
+_rslt = plpy.execute("""select oid,dattablespace from pg_database where datname = '%s';""" % (_dbname))
+(_dboid, _dbspc) = (_rslt[0]["oid"], _rslt[0]["dattablespace"])
+def getSqlValue(_sql):
+    _utility = "PGOPTIONS='-c gp_session_role=utility' psql -v ON_ERROR_STOP=1"
+    _cmd="""%s -d '%s' -p %s -tAXF '|' 2>&1 <<_END_OF_SQL
+%s
+_END_OF_SQL
+""" % (_utility, _dbname, _port, _sql)
+    try:
+        val=os.popen(_cmd).read()
+        return val.strip()
+    except Exception, e:
+        plpy.error(str(e))
+_dftpath = getSqlValue("""show data_directory""") + "/base/" + _dboid + "/"
+_rslt = plpy.execute("""select t.oid,trim(n.location_1)||'/'||t.oid||'/'||'%s'||'/' path
+    from pg_tablespace t,pg_filespace f,gp_persistent_filespace_node n
+    where t.spcfsoid = f.oid and f.oid = n.filespace_oid;""" % (_dboid))
+_spcarray = []
+_spcarray.append([1663, _dftpath])
+for _row in _rslt:
+    (_spcoid, _spcpath) = (_row["oid"], _row["path"])
+    if not(os.path.exists(_spcpath)):
+        continue
+    if os.path.isfile(_spcpath):
+        continue
+    _spcarray.append([_spcoid, _spcpath])
+_sizemap = {}
+for _spcinfo in _spcarray:
+    (_spcoid, _spcpath) = (_spcinfo[0], _spcinfo[1])
+    _lscmd = """ls -lL --full-time %s|awk '{print $9"\t"$5"\t"$6" "$7}'|grep '^[0-9]'|sort -n""" % (_spcpath)
+    _rslt = os.popen(_lscmd).read().strip()
+    if _rslt == "":
+        continue
+    for _row in _rslt.split("\n"):
+        (_relfile, _size, _time) = _row.split("\t")
+        _relfile = _relfile.split(".")[0]
+        _key = str(_spcoid) + "-" + _relfile
+        if _sizemap.has_key(_key):
+            _sizemap[_key] = [_sizemap[_key][0] + int(_size), _sizemap[_key][1] + 1, _sizemap[_key][2] + "\n" + _time]
+        else:
+            _sizemap[_key] = [int(_size),1,_time]
+_rslt = plpy.execute("""select n.nspname,c.relname,c.reltablespace,c.relfilenode,c.relstorage
+    from pg_class c, pg_namespace n where c.relnamespace = n.oid
+    and c.relkind = 'r' and c.relstorage <> 'x' and c.reltablespace <> 1664 and not c.relhassubclass
+    and n.nspname not like E'pg\_temp\_%' and n.nspname not like E'pg\_toast\_temp\_%';""")
+for _row in _rslt:
+    (_nspname, _relname, _relspc) = (_row["nspname"], _row["relname"], _row["reltablespace"])
+    (_relfile, _storage) = ( _row["relfilenode"], _row["relstorage"])
+    if _relspc == "0":
+        _relspc = _dbspc
+    _key = _relspc + "-" + _relfile
+    if _sizemap.has_key(_key):
+        if _storage == "h":
+            yield (_nspname, _relname, _sizemap[_key][0], _sizemap[_key][1], _sizemap[_key][2])
+        else:
+            yield (_nspname, _relname, _sizemap[_key][0], _sizemap[_key][1], None)
+    else:
+        yield (_nspname, _relname, 0, 0, None)
+$$ LANGUAGE PLPYTHONU;
+/**
+gp_toolkit.gp_table_file_info()函数返回数组,信息分别为:
+1、schema名称
+2、table名称
+3、文件尺寸
+4、文件个数
+查询结果字段信息:
+1、schema名称
+2、table名称
+3、文件尺寸[全集群]
+4、文件个数[全集群]
+5、预期文件数[如果是行存-每个实例记为1个-如果是列存-每个实例记为列的个数]
+6、文件数比例[总文件数 / 预期文件数]
+7、尺寸最小实例的尺寸
+8、尺寸最大实例的尺寸
+9、Heap表的所有文件时间戳的MD5值-用于识别Heap表是否发生过变化
+**/
+select nspname, relname, tablesize, filecount, expectfilecount,
+    filecount / expectfilecount filecountratio, minsize, maxsize, fileflag from (
+    select size[1] as nspname, size[2] as relname,
+        sum(size[3]::bigint) tablesize,string_agg(size[3],','), sum(size[4]::bigint) filecount,
+        min(size[3]::bigint) minsize,
+        max(size[3]::bigint) maxsize,
+        md5(string_agg(size[5],E'\n' order by segment_id)) fileflag from (
+        select gp_toolkit.gp_table_file_info() size, gp_segment_id segment_id from gp_dist_random('gp_id')
+     ) x group by 1,2
+) x left join (
+    select nspname, relname, decode(relstorage, 'c', attcount, 1) * y.segs expectfilecount from (
+        select nspname, relname, relstorage, count(*) attcount
+        from pg_namespace n, pg_class c, pg_attribute a
+        where n.oid = c.relnamespace and c.oid = a.attrelid
+        and c.relkind = 'r' and c.relstorage <> 'x' and c.reltablespace <> 1664 and not c.relhassubclass
+        and n.nspname not like E'pg\_temp\_%' and n.nspname not like E'pg\_toast\_temp\_%'
+        group by 1,2,3
+    ) x, (
+        select count(*) as segs from gp_segment_configuration where role = 'p' and content <> -1
+    ) y
+) y using(nspname, relname) order by 6 desc;
