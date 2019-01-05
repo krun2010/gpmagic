@@ -20,7 +20,7 @@ gpdbtransfer
 [gpadmin@mdw ~]$ cd $GPHOME/bin  
 [gpadmin@mdw bin]$ chown gpadmin. gpdbtransfer  
 [gpadmin@mdw bin]$ chmod 755 gpdbtransfer  
-使用说明可以参考命令的help信息和word文档  
+使用说明可以参考命令的help信息或readme目录中查看  
 
 gpdbcluster命令暂未经过大规模验证    
 建议慎重用于生产环境    
