@@ -1051,12 +1051,12 @@ sh $localfile                                                                   
 sed s/.*MaxStartups.*/'MaxStartups 400:30:500'/ -i /etc/ssh/sshd_config
 if [ $IS_RHEL == 1 ];then
     if [ $RHEL_VERSION == 7 ];then
-        systemctl restart sshd.service                                            > /dev/null 2>&1
+        systemctl reload sshd.service                                             > /dev/null 2>&1
     else
-        service sshd restart                                                      > /dev/null 2>&1
+        service sshd reload                                                       > /dev/null 2>&1
     fi
 elif [ $IS_SuSE == 1 ];then
-    service ssh restart                                                           > /dev/null 2>&1
+    service ssh reload                                                            > /dev/null 2>&1
 fi
 ##################################################################################
 groupadd -r -g $USID $USNM                                                        > /dev/null 2>&1
