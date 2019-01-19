@@ -249,7 +249,7 @@ sub startMainTask{
 sub subThreadTask{
     my ($hostname) = @_;
     my $timeout = $DURATION + 9;
-    my $command = qq{timeout -s 9 $timeout netperf -H $hostname -l $DURATION -p 23000 -f M -4 -P 0 -t $TEST_TYPE|tee -a /tmp/haha};
+    my $command = qq{timeout -s 9 $timeout netperf -H $hostname -l $DURATION -p 23000 -f M -4 -P 0 -t $TEST_TYPE};
     my ($output,$code) = executeCommand($command);
     return ($hostname,trim($output),$code);
 }
