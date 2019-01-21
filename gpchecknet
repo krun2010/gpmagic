@@ -5,16 +5,16 @@ use threads;
 use Thread::Queue;
 use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
 use POSIX;
-use Time::HiRes qw(gettimeofday);
+use Time::HiRes qw(usleep nanosleep);
 use strict;
 
-my (@HOST_ARRAY,$HOST_FILE,$TEST_TYPE,$DURATION,$SUBTASK,$IS_HELP,$VERSION);
+my (@HOST_ARRAY,$HOST_FILE,$TEST_TYPE,$DURATION,$SUBTASK,$BASE_TIME,$IS_HELP,$VERSION);
 my ($LOCAL_HOSTNAME);
 my $MAIN_PID = substr("000000".$$,-6);
 (my $CMD_NAME = $0) =~ s!.*/(.*)!$1!;
 my $CMD_PATH = dirname(__FILE__);
 my @NEED_COMMAND = ("scp","ssh","perl",'ps',"netserver","netperf");
-my (@RESULT_ARRAY);
+my (%HOST_TIME_BASE,@RESULT_ARRAY);
 
 my $HELP_MESSAGE = qq#COMMAND NAME: $CMD_NAME
 Check a Greenplum database network performance.
@@ -56,7 +56,7 @@ OPTIONS
 
 -f <hostname file>
 
-  The location and name of file containing list of hostname for execute matrix netperf. 
+  The location and name of file containing list of hostname for execute matrix netperf.
   Every host per line.
   Utility will ignore any line start with #.'#'.q# or blank line.
 
@@ -130,6 +130,7 @@ sub getOption{
         't:s'         => \$TEST_TYPE,
         'duration:i'  => \$DURATION,
         'subtask:s'   => \$SUBTASK,
+        'basetime:f'  => \$BASE_TIME,
         'help!'       => \$IS_HELP,
         'version!'    => \$VERSION,
     );
@@ -201,22 +202,66 @@ sub checkOption{
         $DURATION = 30;
     }
 }
+sub mainThreadCheck{
+    my ($hostname,$base_time) = @_;
+    my $command = qq{ssh $hostname -T 'date +%s.%N'};
+    my ($host_time,$code) = executeCommand($command);
+    my $end_time = trim(readpipe("date +%s.%N"));
+    my $time_spen = $end_time - $base_time;
+    return ($code,$hostname,$host_time,$time_spen);
+}
+sub mainCheckDelay{
+    my $base_time = trim(readpipe("date +%s.%N"));
+    my @thread_array = ();
+    for my $hostname(@HOST_ARRAY){
+        my ($task_thread) = threads->new(\&mainThreadCheck,$hostname,$base_time);
+        push @thread_array,$task_thread;
+    }
+    my $have_problem = 0;
+    my $max_spen = 0.0;
+    for my $thread(@thread_array){
+        my ($code,$hostname,$host_time,$time_spen) = $thread->join;
+        if($code != 0){
+            $have_problem = 1;
+            logMessage($host_time);
+        }else{
+            if($time_spen > $max_spen){
+                $max_spen = $time_spen;
+            }
+            $HOST_TIME_BASE{$hostname} = $host_time - $time_spen;
+        }
+    }
+    if($have_problem){
+        exit 1;
+    }
+    if($max_spen > 12.0 || $max_spen < 6.0){
+        $max_spen += 6.0;
+    }else{
+        $max_spen *= 1.5;
+    }
+    for my $hostname(keys %HOST_TIME_BASE){
+        $HOST_TIME_BASE{$hostname} = $HOST_TIME_BASE{$hostname} + $max_spen;
+    }
+    return $max_spen;
+}
 sub mainThreadTask{
-    my ($hostname,$task_string) = @_;
+    my ($hostname,$max_delay,$base_time,$task_string) = @_;
+    my $timeout = int($DURATION + $max_delay) + 6;
     executeCommand(qq{scp $CMD_PATH/$CMD_NAME $hostname:/tmp/});
     my $hostname_encode = encode($hostname);
-    my $command = qq{ssh $hostname -T 'perl /tmp/$CMD_NAME -h $hostname_encode -t $TEST_TYPE --duration $DURATION --subtask $task_string'};
+    my $command = qq{timeout -s 9 $timeout ssh $hostname -T 'perl /tmp/$CMD_NAME -h $hostname_encode --basetime $base_time -t $TEST_TYPE --duration $DURATION --subtask $task_string'};
     my ($output,$code) = executeCommand($command);
     return ($output,$code);
 }
 sub mainKillAll{
     for my $hostname(@HOST_ARRAY){
-        my $kill_bash = q#ps ax|egrep 'netperf|netserver'|grep -vw egrep|awk '{system("kill -9 "$1)}'#;
+        my $kill_bash = q#ps ax|egrep 'netperf|netserver'|egrep -vw 'grep|egrep'|awk '{system("kill -9 "$1)}'#;
         my $command = qq{ssh $hostname -T <<'END_OF_SSH'\n}.$kill_bash."\nEND_OF_SSH";
         executeCommand($command);
     }
 }
 sub startMainTask{
+    my ($max_delay) = @_;
     mainKillAll();
     my @thread_array = ();
     my @temp_host_array = ();
@@ -225,7 +270,7 @@ sub startMainTask{
     }
     my $all_host_string = join(".",@temp_host_array);
     for my $hostname(@HOST_ARRAY){
-        my ($task_thread) = threads->new(\&mainThreadTask,$hostname,$all_host_string);
+        my ($task_thread) = threads->new(\&mainThreadTask,$hostname,$max_delay,$HOST_TIME_BASE{$hostname},$all_host_string);
         push @thread_array,$task_thread;
     }
     my $success = 1;
@@ -248,26 +293,36 @@ sub startMainTask{
 }
 sub subThreadTask{
     my ($hostname) = @_;
-    my $timeout = $DURATION + 9;
-    my $command = qq{timeout -s 9 $timeout netperf -H $hostname -l $DURATION -p 23000 -f M -4 -P 0 -t $TEST_TYPE};
+    my $timeout = $DURATION + 3;
+    my $command = qq{set -o pipefail;timeout -s 9 $timeout netperf -H $hostname -l $DURATION -p 23000 -f M -4 -P 0 -t $TEST_TYPE};
+    if($TEST_TYPE eq "UDP_STREAM"){
+        $command = $command." -N";
+    }
+    $command = $command.qq{|head -n 1};
     my ($output,$code) = executeCommand($command);
     return ($hostname,trim($output),$code);
 }
 sub subKillAll{
-    my $kill_bash = q#ps ax|egrep 'netperf|netserver'|grep -vw egrep|awk '{system("kill -9 "$1)}'#;
+    my $kill_bash = q#ps ax|egrep 'netperf|netserver'|egrep -vw 'grep|egrep'|awk '{system("kill -9 "$1)}'#;
     executeCommand($kill_bash);
 }
 sub startSubTask{
     my $command = qq{netserver -p 23000 -4 > /dev/null 2>&1};
     my ($output,$code) = executeCommand($command);
-    sleep 1;
     my $check = qq{ps ax|grep netserver|grep -vw grep|tee};
     ($output,$code) = executeCommand($check);
     if($output eq ""){
         logMessage("Host $LOCAL_HOSTNAME start netserver failed");
         exit 2;
     }
-    sleep 2;
+    my $current_time = trim(readpipe("date +%s.%N"));
+    my $need_wait = $BASE_TIME - $current_time;
+    if($need_wait < 0){
+        subKillAll();
+        logMessage("Waiting time before current time");
+        exit 1;
+    }
+    usleep($need_wait * 1000000);
     my @thread_array = ();
     for my $hostname(@HOST_ARRAY){
         if($hostname ne $LOCAL_HOSTNAME){
@@ -307,9 +362,6 @@ sub outputResult{
         if(length($host_to) > $max_name_length){
             $max_name_length = length($host_to);
         }
-        if(length(round($ratio,2)) > $max_ratio_length){
-            $max_ratio_length = length(round($ratio,2));
-        }
         if($max_ratio eq "" || $ratio > $max_ratio){
             ($max_from_host,$max_to_host,$max_ratio) = ($host_from,$host_to,$ratio);
         }
@@ -320,11 +372,14 @@ sub outputResult{
             $send_ratio{$host_from} = 0.0;
         }
         $send_ratio{$host_from} = $send_ratio{$host_from} + $ratio;
-        
         if(!exists $recieve_ratio{$host_to}){
             $recieve_ratio{$host_to} = 0.0;
         }
         $recieve_ratio{$host_to} = $recieve_ratio{$host_to} + $ratio;
+        my $max_sum = $send_ratio{$host_from} > $recieve_ratio{$host_to} ? $send_ratio{$host_from} : $recieve_ratio{$host_to};
+        if(length(round($max_sum,2)) > $max_ratio_length){
+            $max_ratio_length = length(round($max_sum,2));
+        }
     }
     my $host_pad = " " x $max_name_length;
     my $ratio_pad = " " x $max_ratio_length;
@@ -336,13 +391,13 @@ sub outputResult{
     print "    ".substr($min_from_host.$host_pad,0,$max_name_length)."  =>  ".substr($min_to_host.$host_pad,0,$max_name_length)."  :  ".substr($ratio_pad.$min_ratio,0 - $max_ratio_length)." MB\n";
     print "\n";
     print "Host Send Ratio:\n";
-    for my $hostname(keys %send_ratio){
+    for my $hostname(sort(keys %send_ratio)){
         my $ratio = round($send_ratio{$hostname},2);
         print "    ".substr($hostname.$host_pad,0,$max_name_length)."  :  ".substr($ratio_pad.$ratio,0 - $max_ratio_length)." MB\n";
     }
     print "\n";
     print "Host Recieve Ratio:\n";
-    for my $hostname(keys %recieve_ratio){
+    for my $hostname(sort(keys %recieve_ratio)){
         my $ratio = round($recieve_ratio{$hostname},2);
         print "    ".substr($hostname.$host_pad,0,$max_name_length)."  :  ".substr($ratio_pad.$ratio,0 - $max_ratio_length)." MB\n";
     }
@@ -352,7 +407,8 @@ sub main{
     checkEnvironment();
     checkOption();
     if($SUBTASK eq ""){
-        my $success = startMainTask();
+        my $max_delay = mainCheckDelay();
+        my $success = startMainTask($max_delay);
         if($success){
             outputResult();
         }
