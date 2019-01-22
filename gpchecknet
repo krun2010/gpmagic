@@ -234,10 +234,12 @@ sub mainCheckDelay{
     if($have_problem){
         exit 1;
     }
-    if($max_spen > 20.0 || $max_spen < 10.0){
+    if($max_spen < 10.0){
         $max_spen += 10.0;
+    }elsif($max_spen > 30.0){
+        $max_spen += 20.0;
     }else{
-        $max_spen *= 2.0;
+        $max_spen +=  ($max_spen + 10.0) * 0.5;
     }
     for my $hostname(keys %HOST_TIME_BASE){
         $HOST_TIME_BASE{$hostname} = $HOST_TIME_BASE{$hostname} + $max_spen;
