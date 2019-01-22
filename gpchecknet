@@ -234,10 +234,10 @@ sub mainCheckDelay{
     if($have_problem){
         exit 1;
     }
-    if($max_spen > 12.0 || $max_spen < 6.0){
-        $max_spen += 6.0;
+    if($max_spen > 20.0 || $max_spen < 10.0){
+        $max_spen += 10.0;
     }else{
-        $max_spen *= 1.5;
+        $max_spen *= 2.0;
     }
     for my $hostname(keys %HOST_TIME_BASE){
         $HOST_TIME_BASE{$hostname} = $HOST_TIME_BASE{$hostname} + $max_spen;
@@ -247,6 +247,9 @@ sub mainCheckDelay{
 sub mainThreadTask{
     my ($hostname,$max_delay,$base_time,$task_string) = @_;
     my $timeout = int($DURATION + $max_delay) + 6;
+    if($TEST_TYPE eq "UDP_STREAM"){
+        $timeout *= 2;
+    }
     executeCommand(qq{scp $CMD_PATH/$CMD_NAME $hostname:/tmp/});
     my $hostname_encode = encode($hostname);
     my $command = qq{timeout -s 9 $timeout ssh $hostname -T 'perl /tmp/$CMD_NAME -h $hostname_encode --basetime $base_time -t $TEST_TYPE --duration $DURATION --subtask $task_string'};
@@ -294,10 +297,10 @@ sub startMainTask{
 sub subThreadTask{
     my ($hostname) = @_;
     my $timeout = $DURATION + 3;
-    my $command = qq{set -o pipefail;timeout -s 9 $timeout netperf -H $hostname -l $DURATION -p 23000 -f M -4 -P 0 -t $TEST_TYPE};
     if($TEST_TYPE eq "UDP_STREAM"){
-        $command = $command." -N";
+        $timeout *= 2;
     }
+    my $command = qq{set -o pipefail;timeout -s 9 $timeout netperf -H $hostname -l $DURATION -p 23000 -f M -4 -P 0 -t $TEST_TYPE};
     $command = $command.qq{|head -n 1};
     my ($output,$code) = executeCommand($command);
     return ($hostname,trim($output),$code);
@@ -333,6 +336,9 @@ sub startSubTask{
     for my $thread(@thread_array){
         my ($hostname,$output,$code) = $thread->join;
         if($code != 0){
+            if($TEST_TYPE eq "UDP_STREAM"){
+                next;
+            }
             subKillAll();
             logMessage($output);
             sleep 1;
