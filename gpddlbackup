@@ -8,7 +8,7 @@ use Fcntl qw(:flock);
 use POSIX;
 
 my ($DATABASE_NAME,$PORT,$TO_FILE,$TARGET_VERSION,$IS_HELP,$VERSION);
-my (%MAP_OF_RESOURCE_QUEUE,%MAP_OF_ROLE,%MAP_OF_TABLESPACE,%MAP_OF_LANGUAGE,%MAP_OF_SCHEMA,%MAP_OF_TYPE,%MAP_OF_FUNCTION,
+my (%MAP_OF_RESOURCE_QUEUE,%MAP_OF_ROLE,%MAP_OF_TABLESPACE,%MAP_OF_LANGUAGE,%MAP_OF_SCHEMA,%MAP_OF_TYPE,%MAP_OF_FUNCTION_ARGDEF,%MAP_OF_FUNCTION,
     %MAP_OF_ATTRIBUTE,%MAP_OF_ATTRDEF,%MAP_OF_DISTRIBUTION,%MAP_OF_PARTITION,%MAP_OF_PARTITION_RULE,%MAP_OF_PARTITION_OID,
     %MAP_OF_TABLE,%MAP_OF_VIEW_DEPTH,%MAP_OF_EXTTABLE_FMT,%MAP_OF_INDEX);
 my ($DATABASE_TABLESPACE,$DATABASE_VERSION);
@@ -81,6 +81,11 @@ my $SQL_GET_FUNCTION = qq#SELECT oid,replace(encode(textsend(proname),'base64'),
     replace(encode(textsend(prosrc),'base64'),chr(10),''),probin,replace(encode(textsend(array_to_string(proacl,$SQL_SPLIT)),'base64'),chr(10),''),prodataaccess
 FROM pg_proc
 WHERE pronamespace >=16384 or pronamespace = 2200;#;
+my $SQL_GET_FUNCTION_ARGDEF = qq#SELECT oid,pronargs,replace(encode(textsend(pg_get_expr(proargdefaults,'pg_catalog.pg_class'::regclass)),'base64'),chr(10),''),pronargdefaults
+FROM pg_proc
+WHERE pronamespace >=16384 or pronamespace = 2200 AND pronargdefaults > 0;
+#;
+
 my $SQL_GET_SEQUENCE = qq{SELECT c.oid,c.relnamespace,c.relowner,replace(encode(textsend(relname),'base64'),chr(10),''),
     replace(encode(textsend(array_to_string(c.relacl,$SQL_SPLIT)),'base64'),chr(10),'')
 FROM pg_class c,pg_namespace n
@@ -296,6 +301,9 @@ sub checkOption{
         if(!open($FILE_HANDLE,">",$TO_FILE)){
             errorMessage("Can't open file: $TO_FILE");
         }
+    }
+    if($TARGET_VERSION eq ""){
+        $TARGET_VERSION = 5;
     }
 }
 sub getVersion{
@@ -647,6 +655,52 @@ sub outputDomain{
         output($REGION_END.$TAIL_Type);
     }
 }
+sub getArrayFromCommaSeparatedList{
+    my ($string) = @_;
+    if($string eq ""){
+        return [()];
+    }
+    my @array = split(//,$string);
+    my @list = ();
+    my ($inSingleQuote,$inDoubleQuote,$bracketLevel) = (0,0,0);
+    my $item = "";
+    for my $curr(@array){
+        $item = $item.$curr;
+        if(!$inDoubleQuote && $curr eq "'"){
+            $inSingleQuote = !$inSingleQuote;
+        }elsif(!$inSingleQuote && $curr eq '"'){
+            $inDoubleQuote = !$inDoubleQuote;
+        }elsif(!$inDoubleQuote && !$inSingleQuote && $curr eq '('){
+            $bracketLevel++;
+        }elsif (!$inDoubleQuote && !$inSingleQuote && $curr eq ')'){
+            $bracketLevel--;
+        }elsif (!$inDoubleQuote && !$inSingleQuote && $bracketLevel == 0 && $curr eq ','){
+            push @list,trim(substr($item,0,-1));
+            $item = "";
+        }
+    }
+    if($inDoubleQuote || $inSingleQuote || $bracketLevel != 0){
+        errorMessage("Can not split:\n".$string);
+    }
+    push @list,trim($item);
+    return @list;
+}
+sub getFunctionArgDef{
+    if($DATABASE_VERSION < 5){
+        return;
+    }
+    my @result = queryResult($SQL_GET_FUNCTION_ARGDEF);
+    for my $row(@result){
+        my ($oid,$pronargs,$defvalues,$defnum) = @$row;
+        $defvalues = decode($defvalues);
+        my @def_array = getArrayFromCommaSeparatedList($defvalues);
+        my $def_index = $pronargs - $defnum;
+        for my $def(@def_array){
+            $MAP_OF_FUNCTION_ARGDEF{$oid."-".$def_index} = $def;
+            $def_index ++;
+        }
+    }
+}
 sub outputFunction{
     my @result = queryResult($SQL_GET_FUNCTION);
     my %volatile = ("s" => "STABLE","i" => "IMMUTABLE","v" => "VOLATILE");
@@ -666,15 +720,23 @@ sub outputFunction{
         }
         my $create = qq{CREATE OR REPLACE FUNCTION $pronamespace.$proname(};
         my $arguments = "";
+        my $argstype = "";
         if($pronargs > 0){
             my @type_array = split(/,/,("" eq $proallargtypes ? $proargtypes : $proallargtypes));
             my @mode_array = split(/,/,$proargmodes);
             my @name_array = split(/$CMD_SPLIT/,$proargnames);
-            my @arg_array = ();
+            my @argument_array = ();
+            my @argstype_array = ();
             for my $index(0 .. @type_array - 1){
-                push @arg_array,($mode_array[$index] eq "o" ? "OUT " : "").("" eq $name_array[$index] ? "" : quote($name_array[$index])." ").$MAP_OF_TYPE{$type_array[$index]};
+                my $argument = ($mode_array[$index] eq "o" ? "OUT " : "").("" eq $name_array[$index] ? "" : quote($name_array[$index])." ").$MAP_OF_TYPE{$type_array[$index]};
+                push @argstype_array,$argument;
+                if($TARGET_VERSION > 4 && exists $MAP_OF_FUNCTION_ARGDEF{$oid."-".$index}){
+                    $argument = $argument." DEFAULT ".$MAP_OF_FUNCTION_ARGDEF{$oid."-".$index};
+                }
+                push @argument_array,$argument;
             }
-            $arguments = join(", ",@arg_array);
+            $arguments = join(", ",@argument_array);
+            $argstype = join(", ",@argstype_array);
             $create = $create.$arguments;
         }
         $create = $create.") RETURNS";
@@ -686,9 +748,9 @@ sub outputFunction{
         }
         $create = $create." LANGUAGE ".$MAP_OF_LANGUAGE{$prolang}." ".$volatile{$provolatile}.("t" eq $proisstrict ? " STRICT" : "").";";
         output($create);
-        $MAP_OF_FUNCTION{$oid} = qq{$pronamespace.$proname($arguments)};
+        $MAP_OF_FUNCTION{$oid} = qq{$pronamespace.$proname($argstype)};
         $proowner = $MAP_OF_ROLE{$proowner};
-        output(qq{ALTER FUNCTION $pronamespace.$proname($arguments) OWNER TO $proowner;});
+        output(qq{ALTER FUNCTION $pronamespace.$proname($argstype) OWNER TO $proowner;});
         if("" ne $proacl){
             for my $option(split(/$CMD_SPLIT/,$proacl)){
                 my ($role,$value) = split(/=/,$option,2);
@@ -1268,6 +1330,7 @@ sub main{
     outputCompType();
     outputEnum();
     outputDomain();
+    getFunctionArgDef();
     outputFunction();
     outputSequence();
     getDatabaseTablespace();
