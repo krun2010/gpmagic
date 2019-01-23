@@ -120,11 +120,11 @@ my $SQL_GET_VIEW = qq{SELECT c.relnamespace,c.oid,c.relowner,replace(encode(text
     replace(encode(textsend(c.relname),'base64'),chr(10),''),
     replace(encode(textsend(pg_get_viewdef(c.oid)),'base64'),chr(10),'')
 FROM pg_class c,pg_namespace n
-WHERE c.relnamespace=n.oid AND c.relkind='v' AND (c.relnamespace>16384 OR n.nspname='public') AND n.nspname NOT LIKE E'pg\_temp\_%' AND n.nspname NOT LIKE E'pg\_toast\_temp\_%';};
+WHERE c.relnamespace=n.oid AND c.relkind='v' AND (n.oid >= 16384 OR n.nspname='public') AND n.nspname NOT LIKE E'pg\_temp\_%' AND n.nspname NOT LIKE E'pg\_toast\_temp\_%';};
 
 my $SQL_GET_INDEX = q{SELECT indrelid, c.relnamespace, replace(encode(textsend(pg_get_indexdef(indexrelid)),'base64'),chr(10),'')
 FROM pg_index i, pg_class c, pg_namespace n
-WHERE i.indrelid = c.oid AND c.relnamespace = n.oid AND c.oid >= 16384 AND (n.oid >= 16384 OR n.oid = 2200);};
+WHERE i.indrelid = c.oid AND c.relnamespace = n.oid AND c.oid >= 16384 AND (n.oid >= 16384 OR n.nspname='public') AND n.nspname NOT LIKE E'pg\_temp\_%' AND n.nspname NOT LIKE E'pg\_toast\_temp\_%';};
 
 my $SQL_GET_COMMENT = q{SELECT objoid,classoid,objsubid,replace(encode(textsend(description),'base64'),chr(10),'') FROM pg_description
     WHERE objoid >= 16384 AND NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = objoid);};
