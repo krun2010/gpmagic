@@ -983,8 +983,8 @@ fi
 ##################################################################################
 hostname $HSNM
 if [ -f /etc/sysconfig/network ];then
-    echo 'NETWORKING=yes'  > /etc/sysconfig/network
-    echo 'HOSTNAME=$HSNM' >> /etc/sysconfig/network
+    echo "NETWORKING=yes"  > /etc/sysconfig/network
+    echo "HOSTNAME=$HSNM" >> /etc/sysconfig/network
 fi
 if [ -f /etc/hostname ];then
     echo $HSNM > /etc/hostname
