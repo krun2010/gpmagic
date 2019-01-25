@@ -1511,6 +1511,10 @@ sub executeTransfer{
     while(defined $task){
         my @stat_msg :shared;
         my ($src_table,$dest_table,$where,$relkind,$dep_tables,$src_tim,$count) = @$task;
+        my $from_to_info = qq{FROM $src_table TO $dest_table};
+        if($src_table eq $dest_table){
+            $from_to_info = qq{FOR TABLE NAME $dest_table};
+        }
         $where = "" eq $where ? $GLOBAL_CONDITION : " where ".$where;
         my ($src_scma,$src_rel) = split(/\./,$src_table,2);
         my $src_tableqq = qq{"$src_scma"."$src_rel"};
@@ -1530,7 +1534,7 @@ sub executeTransfer{
             }elsif("v" eq $relkind){
                 ($code,$value) = queryResult("SRC",qq{explain select * from $src_tableqq}.qq{$where;},"CV");
                 if($code > 0){
-                   @stat_msg = ("FAILED","Can't get view's explain, FROM $src_table TO $dest_table [$code],[$value]");
+                   @stat_msg = ("FAILED","Can't get view's explain, $from_to_info [$code],[$value]");
                    goto GOTO_NEXT_TASK;
                 }
                 if($value =~ /Gather Motion/){
@@ -1564,7 +1568,7 @@ sub executeTransfer{
             $dest_ext_ddl = $dest_ext_ddl."\nFORMAT 'TEXT' ENCODING '$ENCODING';";
             ($code,$value) = queryResult("DEST",$dest_ext_ddl,"CV");
             if($code > 0){
-                @stat_msg = ("FAILED","DDL occur error, FROM $src_table TO $dest_table [$code],[$value]");
+                @stat_msg = ("FAILED","DDL occur error, $from_to_info [$code],[$value]");
                 goto GOTO_NEXT_TASK;
             }
             ($code,$value) = (0,"");
@@ -1574,10 +1578,10 @@ sub executeTransfer{
                 ($code,$value) = queryResult("DEST",qq{BEGIN;LOCK TABLE $dest_tableqq IN EXCLUSIVE MODE NOWAIT;delete from $dest_tableqq}.$where.";END;","CV");
             }
             if($code > 0){
-                @stat_msg = ("FAILED","Execute data clean occur error, FROM $src_table TO $dest_table [$code],[$value]");
+                @stat_msg = ("FAILED","Execute data clean occur error, $from_to_info [$code],[$value]");
                 goto GOTO_NEXT_TASK;
             }
-            my @info_msg :shared = ("INFO","Start transfer FROM $src_table TO $dest_table TYPE $relkind MODE ".($from_master ? "LOW" : "FAST")." WITH $where");
+            my @info_msg :shared = ("INFO","Start transfer $from_to_info TYPE $relkind MODE ".($from_master ? "LOW" : "FAST")." WITH $where");
             $MSG_QUEUE->enqueue(\@info_msg);
             my $dest_sql = qq{BEGIN;LOCK TABLE $dest_tableqq IN ROW EXCLUSIVE MODE NOWAIT;\ninsert into $dest_tableqq select * from $dest_ext_table;\nEND;};
             if(!$NEED_ANALYZE){
@@ -1594,11 +1598,11 @@ sub executeTransfer{
                 }else{
                     $clean_sql = qq{select pg_cancel_backend(procpid) from (select (pg_stat_get_activity(NULL::integer)).* from gp_dist_random('gp_id')) t where application_name='$app_name';};
                 }
-                @stat_msg = ("FAILED","FROM $src_table TO $dest_table [$code],[$value]");
+                @stat_msg = ("FAILED","$from_to_info [$code],[$value]");
                 ($code,$value) = queryResult("SRC",$clean_sql,"CV");
             }else{
                 for my $row(split(/\n/,$value)){if($row =~ /^INSERT/){$value = (split(/ /,$row))[2];}}
-                @stat_msg = ("SUCCESS"," $src_table TO $dest_table ROWS $value TYPE $relkind TIME $duration S WITH $where",$src_scma,$src_rel,$src_tim.";".$count);
+                @stat_msg = ("SUCCESS","$from_to_info ROWS $value TYPE $relkind TIME $duration S WITH".($where eq "" ? "" :  " $where"),$src_scma,$src_rel,$src_tim.";".$count);
             }
         }
 GOTO_NEXT_TASK:
@@ -1623,10 +1627,10 @@ sub executeMessage{
                     my $stat_record = $base64_name.";".$full_name.";".$last_stat;
                     system(qq{sed '/^$base64_name;/d' -i $LAST_STAT_FILE_NAME\necho '$stat_record' >> $LAST_STAT_FILE_NAME\n});
                 }
-                logMessage($type,"($success_index/$error_index/$tables_size)".$msg);
+                logMessage($type,"($success_index/$error_index/$tables_size) ".$msg);
             }elsif("FAILED" eq $type){
                 $error_index += 1;
-                logMessage($type,"($success_index/$error_index/$tables_size)".$msg);
+                logMessage($type,"($success_index/$error_index/$tables_size) ".$msg);
             }else{
                 logMessage($type,$msg);
             }
