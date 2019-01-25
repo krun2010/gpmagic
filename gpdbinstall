@@ -1,4 +1,5 @@
 #!/usr/bin/perl
+use threads;
 use MIME::Base64;
 use File::Basename;
 use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev passthrough);
@@ -15,7 +16,7 @@ if($ENV{PATH} !~ "/sbin"){
 }
 my @NEED_COMMAND = ("ip","zip","unzip","bash","tar","sed","perl","expect","ssh","ifconfig","mkfs.xfs");
 
-my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
+my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$IGNORE_INIT,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
 my (@MASTER_CONFIG,@STANDBY_CONFIG,@ALLHOST_CONFIG_ARRAY,@SEG_INSTALL_CONFIG_ARRAY);
 my ($CLUSTER_EXISTS,$INSTALL_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMIN_NAME);
 my ($COMMAND_FILE_NAME) = ($WORK_PATH."/install_command.sh");
@@ -45,6 +46,7 @@ $CMD_NAME --hosts-config <filename>
     [--mas-port <master work port>]
     [--port-base <primary instance port base>]
     [--mirror-split <amount of machine which mirror split to>]
+    [--ignore-init]
     [--verbose | -v]
     [--parameter-file | --pf <parameter file>]
     [-h | --help]
@@ -160,6 +162,14 @@ OPTIONS
   If this number + 1 bigger or equal to one mirror loop's machine amount, command will exit with error.
   If specify this parameter as 0, command will not config mirror for this cluster.
   Default is 2
+
+[--ignore-init]
+
+  Ignore all greenplum initialization operation.
+  Just do all prepare operation for greenplum as:
+  OS parameter modify.
+  SSH keys exchange.
+  And so on.
 
 [--verbose | -v]
 
@@ -298,6 +308,7 @@ sub getOption{
         'mas-port:i'          => \$MASTER_PORT,
         'port-base:i'         => \$PORT_BASE,
         'mirror-split:i'      => \$MIRROR_SPLIT,
+        'ignore-init!'        => \$IGNORE_INIT,
         'verbose|v!'          => \$VERBOSE,
         'parameter-file|pf:s' => \$PARAMETER_FILE,
         'h|help!'             => \$IS_HELP,
@@ -327,6 +338,7 @@ sub getOption{
             if("mas-port"      eq $para  && "" eq $MASTER_PORT   ){$MASTER_PORT     = $val;}
             if("port-base"     eq $para  && "" eq $PORT_BASE     ){$PORT_BASE       = $val;}
             if("mirror-split"  eq $para  && "" eq $MIRROR_SPLIT  ){$MIRROR_SPLIT    = $val;}
+            if("ignore-init"   eq $para  && "" eq $IGNORE_INIT   ){$IGNORE_INIT     = 1   ;}
             if(("verbose"      eq $para  ||
                 "v"            eq $para) && "" eq $VERBOSE       ){$VERBOSE         = 1   ;}
         }
@@ -474,7 +486,7 @@ sub checkHostsConfig{
         }
         push @ALLHOST_CONFIG_ARRAY,[($ip,$hostname,$role,$ring_number,$ring_order)];
     }
-    if(@MASTER_CONFIG < 1){
+    if(!$IGNORE_INIT && @MASTER_CONFIG < 1){
         errorMessage("Not find master machine config");
     }
     if(@SEG_INSTALL_CONFIG_ARRAY < 1){
@@ -523,6 +535,10 @@ sub checkPasswordAndSudo{
     }
 }
 sub checkRingConfig{
+    if($IGNORE_INIT){
+        logMessage("INFO","Ignore check ring legal");
+        return;
+    }
     logMessage("INFO","Check ring legal".("." x 16));
     @SEG_INSTALL_CONFIG_ARRAY = sort {$a->[5] <=> $b->[5]} @SEG_INSTALL_CONFIG_ARRAY;
     my $ring_size = 0;
@@ -620,6 +636,20 @@ sub modifySystemConfig{
         logMessage("INFO","Segment install directory is:\n".$segment_path);
     }
 }
+sub installThread{
+    my ($ip,$hostname) = @_;
+    my $encode_cmd = encode("if [ -e /usr/local/greenplum-db-$INSTALL_VERSION ];then chown -R $GP_ADMIN_NAME. /usr/local/greenplum*;echo EXISTS;fi");
+    my $command = qq{ssh $hostname -T "echo $encode_cmd|base64 -di|bash"};
+    my $output = executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
+    if($output =~ /EXISTS/){
+        return "SUCCESS";
+    }
+    $command = qq{scp -q /tmp/greenplum-db.install.tmp.tar $hostname:/tmp/greenplum-db.install.tar};
+    executeWithExpect($command,0,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
+    $command = qq{ssh $hostname -T "cd /usr/local/;sudo tar -xf /tmp/greenplum-db.install.tar;sudo rm -f greenplum-db;};
+    $command = $command.qq{sudo ln -s greenplum-db-$INSTALL_VERSION greenplum-db;sudo chown -R $GP_ADMIN_NAME. greenplum*;sudo rm -f /tmp/greenplum-db.install.tar"};
+    executeWithExpect($command,1,([["yes/no","yes"],["password",$PASSWORD],["*#"]]));
+}
 sub installBinary{
     logMessage("INFO","Try to install binary file on current machine".("." x 16));
     if("" eq $GP_VERSION){
@@ -649,19 +679,15 @@ sub installBinary{
     }
     logMessage("INFO","Install path is:\n"."/usr/local/greenplum-db-$INSTALL_VERSION");
     my $output = readpipe(qq{cd /usr/local/;sudo tar -cf /tmp/greenplum-db.install.tmp.tar greenplum-db-$INSTALL_VERSION;sudo chown $CURRENT_USER_NAME. /tmp/greenplum-db.install.tmp.tar});
+    my @thread_array = ();
     for my $config(@ALLHOST_CONFIG_ARRAY){
         my ($ip,$hostname,$role,$ring_number,$ring_order) = @$config;
-        my $encode_cmd = encode("if [ -e /usr/local/greenplum-db-$INSTALL_VERSION ];then chown -R $GP_ADMIN_NAME. /usr/local/greenplum*;echo EXISTS;fi");
-        my $command = qq{ssh $hostname -T "echo $encode_cmd|base64 -di|bash"};
-        my $output = executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
-        if($output =~ /EXISTS/){
-            next;
-        }
-        $command = qq{scp -q /tmp/greenplum-db.install.tmp.tar $hostname:/tmp/greenplum-db.install.tar};
-        executeWithExpect($command,0,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
-        $command = qq{ssh $hostname -T "cd /usr/local/;sudo tar -xf /tmp/greenplum-db.install.tar;sudo rm -f greenplum-db;};
-        $command = $command.qq{sudo ln -s greenplum-db-$INSTALL_VERSION greenplum-db;sudo chown -R $GP_ADMIN_NAME. greenplum*;sudo rm -f /tmp/greenplum-db.install.tar"};
-        executeWithExpect($command,1,([["yes/no","yes"],["password",$PASSWORD],["*#"]]));
+        my ($task_thread) = threads->new(\&installThread,$ip,$hostname);
+        push @thread_array,$task_thread;
+    }
+    my $have_problem = 0;
+    for my $thread(@thread_array){
+        $thread->join;
     }
     system(qq{sudo rm -f /tmp/greenplum-db.install.tmp.tar});
 }
@@ -693,6 +719,10 @@ sub exchangeGpadminKey{
     executeWithExpect($command,0,([["password",$GP_ADMIN_NAME,1],["*#"]]));
 }
 sub initGpSystem{
+    if($IGNORE_INIT){
+        logMessage("INFO","Ignore greenplum initsystem");
+        return;
+    }
     logMessage("INFO","Start greenplum initsystem");
     readpipe(qq{. /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1;psql -h 127.0.0.1 -U $GP_ADMIN_NAME -p $MASTER_PORT -l > /dev/null 2>&1});
     my $exit_code = $? >> 8;
@@ -758,6 +788,10 @@ sub queryResult{
     }
 }
 sub addMirror{
+    if($IGNORE_INIT){
+        logMessage("INFO","Ignore add mirror instance");
+        return;
+    }
     logMessage("INFO","Add mirror instance".("." x 16));
     if($MIRROR_SPLIT < 1){
         logMessage("WARN","Mirror split value small than 1, no need to add mirrors, skip this step.");
@@ -856,6 +890,10 @@ sub addMirror{
     }
 }
 sub addGPFileSpace{
+    if($IGNORE_INIT){
+        logMessage("INFO","Ignore add filespace");
+        return;
+    }
     logMessage("INFO","Add one filespace gpfs".("." x 16));
     my $query = qq{select hostname,dbid,replace(fselocation,'default','gpfs') path from gp_segment_configuration c, pg_filespace_entry e
     where c.dbid = e.fsedbid
@@ -886,6 +924,10 @@ sub addGPFileSpace{
     }
 }
 sub addStandby{
+    if($IGNORE_INIT){
+        logMessage("INFO","Ignore add standby master");
+        return;
+    }
     logMessage("INFO","Add standby master".("." x 16));
     if(@STANDBY_CONFIG > 0){
         my ($ip,$hostname) = @STANDBY_CONFIG;
