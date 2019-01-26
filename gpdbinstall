@@ -641,9 +641,10 @@ sub modifySystemConfig{
 sub installThread{
     my ($ip,$hostname) = @_;
     my $encode_cmd = encode(qq{if [ -e /usr/local/greenplum-db-$INSTALL_VERSION ];then
-sudo rm -f /usr/local/greenplum-db > /dev/null 2>&1
+cd /usr/local/
+sudo rm -f greenplum-db > /dev/null 2>&1
 sudo ln -s greenplum-db-$INSTALL_VERSION greenplum-db > /dev/null 2>&1
-sudo chown -R $GP_ADMIN_NAME. /usr/local/greenplum* > /dev/null 2>&1
+sudo chown -R $GP_ADMIN_NAME. greenplum* > /dev/null 2>&1
 echo EXISTS
 fi});
     my $command = qq{ssh $hostname -T "echo $encode_cmd|base64 -di|bash"};
@@ -813,20 +814,30 @@ sub addMirror{
         logMessage("WARN","Can not ensure all mirror loop match the split number for all segments number mod loop number ".($MIRROR_SPLIT + 1)." != 0");
     }
     my @primary_config_list;
-    my $query = qq{select hostname,content,substr((string_to_array(fselocation,'/'))[2],5),port from gp_segment_configuration c, pg_filespace_entry e\n};
+    my $query = qq{select hostname,content,fselocation,port from gp_segment_configuration c, pg_filespace_entry e\n};
     $query = $query.qq{where c.dbid = e.fsedbid\n};
     $query = $query.qq{and e.fsefsoid = (select oid from pg_filespace where fsname = 'pg_system')\n};
     $query = $query.qq{and c.preferred_role = 'p' and c.content > -1 order by 1,2};
     @primary_config_list = queryResult($query);
     my %primary_config_map = ();
     for my $config(@primary_config_list){
-        my ($hostname,$content,$data_detail,$port) = @$config;
+        my ($hostname,$content,$location,$port) = @$config;
+        my $path_legal = 0;
+        for my $path(@SEGMENT_DEV){
+            if($location =~ /^$path/){
+                $location = $path;
+                $path_legal = 1;
+            }
+        }
+        if(!$path_legal){
+            errorMessage("Primary path is not a known path: $location");
+        }
         my @config_array = ();
         if(! exists $primary_config_map{$hostname}){
             $primary_config_map{$hostname} = \@config_array;
         }
         @config_array = @{$primary_config_map{$hostname}};
-        push @config_array,$config;
+        push @config_array,[($hostname,$content,$location,$port)];
         $primary_config_map{$hostname} = \@config_array;
     }
     my @mirror_config_list;
@@ -846,12 +857,12 @@ sub addMirror{
                 for my $node(@node_array){
                     my @primary_config_array = @{$primary_config_map{$node}};
                     my $primary_index = 0;
-                    for my $primtry_config(@primary_config_array){
-                        my ($p_hostname,$p_content,$p_data_detail,$p_port) = @$primtry_config;
+                    for my $primary_config(@primary_config_array){
+                        my ($p_hostname,$p_content,$p_location,$p_port) = @$primary_config;
                         my $mirror_position = ((($primary_index / ($SEGS_PER_DISK / $MIRROR_SPLIT)) % $MIRROR_SPLIT) + $node_index + 1) % $node_size;
                         my $m_hostname = $node_array[$mirror_position];
                         my ($m_port,$m_r_port,$p_r_port) = ($p_port + 10000,$p_port + 11000,$p_port + 1000);
-                        my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:/data$p_data_detail/mirror/default/gpseg$p_content";
+                        my $m_config = "mirror$p_content=$p_content:$m_hostname:$m_port:$m_r_port:$p_r_port:$p_location/mirror/default/gpseg$p_content";
                         push @mirror_config_list,$m_config;
                         $primary_index += 1;
                     }
