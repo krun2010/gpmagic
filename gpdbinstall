@@ -498,9 +498,11 @@ sub checkHostsConfig{
         $m_hostname = $seg_ip_hash{$m_ip};
         @MASTER_CONFIG = ($m_ip,$m_hostname);
     }
-    my $current_is_master = readpipe(qq{sudo ip a|grep -o ' $m_ip/'});
-    if(trim($current_is_master) ne $m_ip.'/'){
-        errorMessage("Not find master's ip on current machine: $m_ip.");
+    if(!$IGNORE_INIT){
+        my $current_is_master = readpipe(qq{sudo ip a|grep -o ' $m_ip/'});
+        if(trim($current_is_master) ne $m_ip.'/'){
+            errorMessage("Not find master's ip on current machine: $m_ip.");
+        }
     }
     my ($s_ip,$s_hostname) = @STANDBY_CONFIG;
     if($s_ip eq $m_ip){
@@ -621,7 +623,7 @@ sub modifySystemConfig{
             }
         }
     }
-    if("" eq $master_path){
+    if(!$IGNORE_INIT && "" eq $master_path){
         errorMessage("Not find Master data path");
     }
     if("" eq $segment_path){
@@ -638,7 +640,12 @@ sub modifySystemConfig{
 }
 sub installThread{
     my ($ip,$hostname) = @_;
-    my $encode_cmd = encode("if [ -e /usr/local/greenplum-db-$INSTALL_VERSION ];then chown -R $GP_ADMIN_NAME. /usr/local/greenplum*;echo EXISTS;fi");
+    my $encode_cmd = encode(qq{if [ -e /usr/local/greenplum-db-$INSTALL_VERSION ];then
+sudo rm -f /usr/local/greenplum-db > /dev/null 2>&1
+sudo ln -s greenplum-db-$INSTALL_VERSION greenplum-db > /dev/null 2>&1
+sudo chown -R $GP_ADMIN_NAME. /usr/local/greenplum* > /dev/null 2>&1
+echo EXISTS
+fi});
     my $command = qq{ssh $hostname -T "echo $encode_cmd|base64 -di|bash"};
     my $output = executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
     if($output =~ /EXISTS/){
