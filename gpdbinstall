@@ -596,7 +596,7 @@ sub modifySystemConfig{
             $mode = "M";
             $device = $MASTER_DEV;
         }
-        my $command = qq{scp -q $COMMAND_FILE_NAME $hostname:$COMMAND_FILE_NAME};
+        my $command = qq{scp -q $COMMAND_FILE_NAME $ip:$COMMAND_FILE_NAME};
         executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
         $command = qq{ssh $ip -T "sudo sh $COMMAND_FILE_NAME $hostname $GP_ADMIN_NAME $USER_ID $mode $device"};
         my $output = executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
@@ -723,7 +723,7 @@ sub createSegmentFile{
 }
 sub exchangeGpadminKey{
     logMessage("INFO","Exchange key for $GP_ADMIN_NAME");
-    my $command = qq{sudo su - $GP_ADMIN_NAME -c "gpssh-exkeys -f $WORK_PATH/all_hosts"};
+    my $command = qq{sudo su - $GP_ADMIN_NAME -c ". /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1;gpssh-exkeys -f $WORK_PATH/all_hosts"};
     executeWithExpect($command,0,([["password",$GP_ADMIN_NAME,1],["*#"]]));
 }
 sub initGpSystem{
