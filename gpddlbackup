@@ -23,81 +23,135 @@ my %EXT_FORMAT_TYPE_MAP = ("a" => "AVRO","b" => "CUSTOM","c" => "CSV","p" => "PA
 my %KEY_WORD_SET;
 (my $CMD_NAME = $0) =~ s!.*/(.*)!$1!;
 
-my ($SQL_SPLIT,$CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = ('chr(1)||chr(2)||chr(7)',chr(1).chr(2).chr(7),chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
+my ($CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = (chr(1).chr(2).chr(7),chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
 my $REGION_START  = qq#--------REGION--------START--------#.$CMD_SPLIT.$CMD_SPLIT;
 my $REGION_END    = qq#--------REGION--------END----------#.$CMD_SPLIT.$CMD_SPLIT;
 my $TASK_SPLIT    = qq#--------TASK----------SPLIT--------#.$CMD_SPLIT.$CMD_SPLIT;
 
 my $SQL_GET_KEY_WORD = q#SELECT upper(word) FROM pg_get_keywords();#;
-my $SQL_GET_RESOURCE_QUEUE = q#SELECT oid,replace(encode(textsend(rsqname),'base64'),chr(10),''),
+my $ENCODE_FUNCTION_ARG_CHECK_SQL = qq{SELECT string_agg(t.typname,',' ORDER BY x.idx),md5(prosrc)  prosrc FROM (
+    SELECT oid,proname,proargtypes typs,generate_series(0,array_upper(proargtypes,1)) idx,prosrc FROM pg_proc
+        WHERE proname = 'mcencode' AND pronamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'gp_toolkit')
+    ) x, pg_type t WHERE t.oid = x.typs[x.idx] GROUP BY x.oid,x.proname,x.prosrc ORDER BY 1;};
+my @ENCODE_FUNCTION_ARG_CHECK_VALUE = ("_aclitem","name","text","_text");
+my @ENCODE_FUNCTION_SRC_CHECK_MD5 = ("1e5a15807e4243c2bdad3c6aff6389f1","75245db7e5549d576526e1b10dfe87ad","75245db7e5549d576526e1b10dfe87ad","cac17fe8e01235f96a4805ccc268443d");
+my $ENCODE_FUNCTION_DDL = q#CREATE OR REPLACE FUNCTION gp_toolkit.mcencode(str text) returns varchar as $$
+import base64
+if str == None:
+    return ""
+return base64.b64encode(str).replace("\n","")
+$$ language plpythonu;
+
+CREATE OR REPLACE FUNCTION gp_toolkit.mcencode(strs text[]) returns varchar as $$
+import base64
+if strs == None:
+    return ""
+output = []
+for str in strs:
+    output.append(base64.b64encode(str))
+return ",".join(output).replace("\n","")
+$$ language plpythonu;
+
+CREATE OR REPLACE FUNCTION gp_toolkit.mcencode(str name) returns varchar as $$
+import base64
+if str == None:
+    return ""
+return base64.b64encode(str).replace("\n","")
+$$ language plpythonu;
+
+CREATE OR REPLACE FUNCTION gp_toolkit.mcencode(acls aclitem[]) returns varchar as $$
+import base64
+if acls == None:
+    return ""
+output = []
+for acl in acls:
+    (key,val,findKey,inBracket) = ("","",False,False)
+    for chr in acl:
+        if not findKey:
+            key = key + chr
+        else:
+            val = val + chr
+        if chr == '"':
+            inBracket = not inBracket
+        elif chr == '=' and not inBracket:
+            key = key[0:-1]
+            findKey = True
+    if inBracket:
+        plpy.error("Can not split: %s" % (acl))
+    output.append(base64.b64encode(key)+":"+base64.b64encode(val))
+return ",".join(output).replace("\n","")
+$$ language plpythonu;
+#;
+
+my $SQL_GET_RESOURCE_QUEUE = q#SELECT oid,gp_toolkit.mcencode(rsqname),
     unnest(array['ACTIVE_STATEMENTS','MAX_COST','COST_OVERCOMMIT','MIN_COST']) resname,
     unnest(array[rsqcountlimit::varchar,rsqcostlimit::varchar,decode(rsqovercommit,true,'TRUE','FALSE')::varchar,rsqignorecostlimit::varchar]) ressetting,
     unnest(array[1,2,4,3]) restypid
 FROM pg_resqueue
     UNION
-SELECT rq.oid,replace(encode(textsend(rq.rsqname),'base64'),chr(10),''),
+SELECT rq.oid,gp_toolkit.mcencode(rq.rsqname),
     upper(rt.resname),upper(rc.ressetting),rt.restypid
 FROM pg_resqueue rq,pg_resourcetype rt,pg_resqueuecapability rc
 WHERE rq.oid = rc.resqueueid AND rc.restypid = rt.restypid
 ORDER BY 1,4;#;
-my $SQL_GET_ROLE= qq#SELECT oid,replace(encode(textsend(rolname),'base64'),chr(10),''),rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcatupdate,
-   rolcanlogin,rolconnlimit,rolpassword,rolvaliduntil,array_to_string(rolconfig,$SQL_SPLIT),
+my $SQL_GET_ROLE= qq#SELECT oid,gp_toolkit.mcencode(rolname),rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcatupdate,
+   rolcanlogin,rolconnlimit,rolpassword,rolvaliduntil,gp_toolkit.mcencode(rolconfig),
    rolresqueue,rolcreaterextgpfd,rolcreaterexthttp,rolcreatewextgpfd,
    rolcreaterexthdfs,rolcreatewexthdfs
 FROM pg_authid;#;
-my $SQL_GET_TABLESPACE = q#SELECT ts.oid,replace(encode(textsend(spcname),'base64'),chr(10),''),
+my $SQL_GET_TABLESPACE = q#SELECT ts.oid,gp_toolkit.mcencode(spcname),
     ts.spcowner,
-    replace(encode(textsend(fsname),'base64'),chr(10),'')
+    gp_toolkit.mcencode(fsname)
 FROM pg_tablespace ts,pg_filespace fs
 WHERE ts.spcfsoid = fs.oid AND spcname not in('pg_global');#;
 my $SQL_GET_AUTH_MEMBER = q#SELECT roleid,member,grantor,admin_option FROM pg_auth_members;#;
-my $SQL_GET_SCHEMA = qq#SELECT oid,replace(encode(textsend(nspname),'base64'),chr(10),''),
+my $SQL_GET_SCHEMA = qq#SELECT oid,gp_toolkit.mcencode(nspname),
     nspowner,
-    replace(encode(textsend(array_to_string(nspacl,$SQL_SPLIT)),'base64'),chr(10),'')
+    gp_toolkit.mcencode(nspacl)
 FROM pg_namespace;#;
 my $SQL_GET_LANGUAGE = qq#SELECT oid,lanname,lanispl,lanpltrusted,lanplcallfoid,lanvalidator,
-    replace(encode(textsend(array_to_string(lanacl,$SQL_SPLIT)),'base64'),chr(10),'')
+    gp_toolkit.mcencode(lanacl)
 FROM pg_language;#;
-my $SQL_GET_TYPE = q#SELECT oid,replace(encode(textsend(typname),'base64'),chr(10),''),typnamespace FROM pg_type;#;
-my $SQL_GET_ATTRIBUTE = q{SELECT attrelid,replace(encode(textsend(attname),'base64'),chr(10),''),
-    replace(encode(textsend(format_type(atttypid,atttypmod)),'base64'),chr(10),''),attstattarget,attnum,attstorage,attnotnull,atthasdef,attisdropped
+my $SQL_GET_TYPE = q#SELECT oid,gp_toolkit.mcencode(typname),typnamespace FROM pg_type;#;
+my $SQL_GET_ATTRIBUTE = q{SELECT attrelid,gp_toolkit.mcencode(attname),
+    gp_toolkit.mcencode(format_type(atttypid,atttypmod)),attstattarget,attnum,attstorage,attnotnull,atthasdef,attisdropped
 FROM pg_attribute
 WHERE attrelid >= 16384 AND attnum > 0
 AND NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = attrelid);};
-my $SQL_GET_ATTRDEF = qq{SELECT adrelid,adnum,replace(encode(textsend(adsrc),'base64'),chr(10),'') FROM pg_attrdef
+my $SQL_GET_ATTRDEF = qq{SELECT adrelid,adnum,gp_toolkit.mcencode(adsrc) FROM pg_attrdef
 WHERE NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = adrelid);};
 my $SQL_GET_DISTRIBUTION = q{SELECT localoid,array_to_string(attrnums,',') FROM gp_distribution_policy WHERE NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = localoid);};
-my $SQL_GET_COMPTYPE = q#SELECT oid,replace(encode(textsend(relname),'base64'),chr(10),''),relnamespace,relowner,relnatts FROM pg_class WHERE relkind = 'c' and reltype >= 16384;#;
-my $SQL_GET_ENUM = q#SELECT replace(encode(textsend(typname),'base64'),chr(10),''),typnamespace,typowner,string_agg(replace(encode(textsend(enumlabel),'base64'),chr(10),''),',' ORDER BY e.oid)
+my $SQL_GET_COMPTYPE = q#SELECT oid,gp_toolkit.mcencode(relname),relnamespace,relowner,relnatts FROM pg_class WHERE relkind = 'c' and reltype >= 16384;#;
+my $SQL_GET_ENUM = q#SELECT gp_toolkit.mcencode(typname),typnamespace,typowner,string_agg(gp_toolkit.mcencode(enumlabel),',' ORDER BY e.oid)
 FROM pg_type t,pg_enum e
 WHERE e.enumtypid = t.oid AND typtype ='e' AND t.oid >= 16384
 GROUP BY 1,2,3;#;
-my $SQL_GET_DOMAIN = q#SELECT replace(encode(textsend(d.typname),'base64'),chr(10),''),d.typnamespace,
-replace(encode(textsend(t.typname),'base64'),chr(10),''),t.typnamespace,d.typowner
+my $SQL_GET_DOMAIN = q#SELECT gp_toolkit.mcencode(d.typname),d.typnamespace,
+gp_toolkit.mcencode(t.typname),t.typnamespace,d.typowner
 FROM pg_type d,pg_type t
 WHERE d.typbasetype = t.oid AND d.typtype = 'd' AND d.oid >= 16384;#;
-my $SQL_GET_FUNCTION = qq#SELECT oid,replace(encode(textsend(proname),'base64'),chr(10),''),pronamespace,proowner,prolang,proisagg,prosecdef,proisstrict,proretset,provolatile,pronargs,prorettype,proiswin,
-    array_to_string(proargtypes,','),array_to_string(proallargtypes,','),array_to_string(proargmodes,','),replace(encode(textsend(array_to_string(proargnames,$SQL_SPLIT)),'base64'),chr(10),''),
-    replace(encode(textsend(prosrc),'base64'),chr(10),''),probin,replace(encode(textsend(array_to_string(proacl,$SQL_SPLIT)),'base64'),chr(10),''),prodataaccess
+my $SQL_GET_FUNCTION = qq#SELECT oid,gp_toolkit.mcencode(proname),pronamespace,proowner,prolang,proisagg,prosecdef,proisstrict,proretset,provolatile,pronargs,prorettype,proiswin,
+    array_to_string(proargtypes,','),array_to_string(proallargtypes,','),array_to_string(proargmodes,','),gp_toolkit.mcencode(proargnames),
+    gp_toolkit.mcencode(prosrc),probin,gp_toolkit.mcencode(proacl),prodataaccess
 FROM pg_proc
 WHERE pronamespace >=16384 or pronamespace = 2200;#;
-my $SQL_GET_FUNCTION_ARGDEF = qq#SELECT oid,pronargs,replace(encode(textsend(pg_get_expr(proargdefaults,'pg_catalog.pg_class'::regclass)),'base64'),chr(10),''),pronargdefaults
+my $SQL_GET_FUNCTION_ARGDEF = qq#SELECT oid,pronargs,gp_toolkit.mcencode(pg_get_expr(proargdefaults,'pg_catalog.pg_class'::regclass)),pronargdefaults
 FROM pg_proc
 WHERE pronamespace >=16384 or pronamespace = 2200 AND pronargdefaults > 0;
 #;
 
-my $SQL_GET_SEQUENCE = qq{SELECT c.oid,c.relnamespace,c.relowner,replace(encode(textsend(relname),'base64'),chr(10),''),
-    replace(encode(textsend(array_to_string(c.relacl,$SQL_SPLIT)),'base64'),chr(10),'')
+my $SQL_GET_SEQUENCE = qq{SELECT c.oid,c.relnamespace,c.relowner,gp_toolkit.mcencode(relname),
+    gp_toolkit.mcencode(c.relacl)
 FROM pg_class c,pg_namespace n
 WHERE c.relnamespace = n.oid AND relkind='S' AND (n.oid > 16384 OR n.oid = 2200);};
-my $SQL_GET_DATABASE_TABLESPACE = qq{SELECT replace(encode(textsend(datname),'base64'),chr(10),''),dattablespace FROM pg_database;};
+my $SQL_GET_DATABASE_TABLESPACE = qq{SELECT gp_toolkit.mcencode(datname),dattablespace FROM pg_database;};
 my $SQL_GET_PARTITION = q{SELECT oid,parrelid,parkind,parlevel,paristemplate,array_to_string(paratts,',') FROM pg_partition order by 2,4;};
-my $SQL_GET_PARTITION_RULE = qq{SELECT oid,paroid,parchildrelid,parparentrule,replace(encode(textsend(parname),'base64'),chr(10),''),parisdefault,parruleord,parrangestartincl,parrangeendincl,
-    replace(encode(textsend(pg_get_expr(parrangestart, parchildrelid)),'base64'),chr(10),''),replace(encode(textsend(pg_get_expr(parrangeend, parchildrelid)),'base64'),chr(10),''),
-    replace(encode(textsend(pg_get_partition_rule_def(oid, true)),'base64'),chr(10),'')
+my $SQL_GET_PARTITION_RULE = qq{SELECT oid,paroid,parchildrelid,parparentrule,gp_toolkit.mcencode(parname),parisdefault,parruleord,parrangestartincl,parrangeendincl,
+    gp_toolkit.mcencode(pg_get_expr(parrangestart, parchildrelid)),gp_toolkit.mcencode(pg_get_expr(parrangeend, parchildrelid)),
+    gp_toolkit.mcencode(pg_get_partition_rule_def(oid, true))
 FROM pg_partition_rule ORDER BY 2,4,7;};
-my $SQL_GET_TABLE = qq{SELECT oid,replace(encode(textsend(relname),'base64'),chr(10),''),relnamespace,relowner,reltablespace,relhasindex,relnatts,relchecks,
-    relhasoids,relhaspkey,relhasrules,relhassubclass,replace(encode(textsend(array_to_string(relacl,$SQL_SPLIT)),'base64'),chr(10),''),
+my $SQL_GET_TABLE = qq{SELECT oid,gp_toolkit.mcencode(relname),relnamespace,relowner,reltablespace,relhasindex,relnatts,relchecks,
+    relhasoids,relhaspkey,relhasrules,relhassubclass,gp_toolkit.mcencode(relacl),
     array_to_string(reloptions,',')
 FROM pg_class WHERE (relnamespace >= 16384 OR relnamespace = 2200) AND relkind = 'r' AND relstorage <> 'x';};
 my $SQL_GET_VIEW_DEPEND = q{SELECT v.oid void,t.oid toid,t.relkind kind
@@ -109,29 +163,29 @@ WHERE dv.objid = dt.objid AND dv.refobjid <> dt.refobjid
     GROUP BY 1,2,3;};
 
 my $SQL_GET_EXTTABLE_TYPE = q{SELECT count(*) FROM pg_attribute WHERE attrelid = (SELECT oid FROM pg_class WHERE relname = 'pg_exttable' and relnamespace = 11) AND attname = 'location';};
-my $SQL_GET_EXTTABLE_FMT_1 = qq{SELECT reloid,replace(encode(textsend(array_to_string(location,$SQL_SPLIT||chr(10))),'base64'),chr(10),''),fmttype,replace(encode(textsend(fmtopts),'base64'),chr(10),''),
-replace(encode(textsend(command),'base64'),chr(10),''),rejectlimit,rejectlimittype,fmterrtbl,pg_encoding_to_char(encoding),writable
+my $SQL_GET_EXTTABLE_FMT_1 = qq{SELECT reloid,gp_toolkit.mcencode(location),fmttype,gp_toolkit.mcencode(fmtopts),
+gp_toolkit.mcencode(command),rejectlimit,rejectlimittype,fmterrtbl,pg_encoding_to_char(encoding),writable
 FROM pg_exttable;};
-my $SQL_GET_EXTTABLE_FMT_2 = qq{SELECT reloid,replace(encode(textsend(array_to_string(coalesce(urilocation,execlocation),$SQL_SPLIT||chr(10))),'base64'),chr(10),''),fmttype,replace(encode(textsend(fmtopts),'base64'),chr(10),''),
-replace(encode(textsend(command),'base64'),chr(10),''),rejectlimit,rejectlimittype,fmterrtbl,pg_encoding_to_char(encoding),writable
+my $SQL_GET_EXTTABLE_FMT_2 = qq{SELECT reloid,gp_toolkit.mcencode(coalesce(urilocation,execlocation)),fmttype,gp_toolkit.mcencode(fmtopts),
+gp_toolkit.mcencode(command),rejectlimit,rejectlimittype,fmterrtbl,pg_encoding_to_char(encoding),writable
 FROM pg_exttable;};
 
-my $SQL_GET_EXTTABLE = qq{SELECT oid,replace(encode(textsend(relname),'base64'),chr(10),''),relnamespace,relowner,relnatts,
-    replace(encode(textsend(array_to_string(relacl,$SQL_SPLIT)),'base64'),chr(10),'')
+my $SQL_GET_EXTTABLE = qq{SELECT oid,gp_toolkit.mcencode(relname),relnamespace,relowner,relnatts,
+    gp_toolkit.mcencode(relacl)
 FROM pg_class
 WHERE relstorage = 'x' AND (relnamespace >= 16384 OR relnamespace = 2200);};
 
-my $SQL_GET_VIEW = qq{SELECT c.relnamespace,c.oid,c.relowner,replace(encode(textsend(array_to_string(c.relacl,$SQL_SPLIT)),'base64'),chr(10),''),
-    replace(encode(textsend(c.relname),'base64'),chr(10),''),
-    replace(encode(textsend(pg_get_viewdef(c.oid)),'base64'),chr(10),'')
+my $SQL_GET_VIEW = qq{SELECT c.relnamespace,c.oid,c.relowner,gp_toolkit.mcencode(relacl),
+    gp_toolkit.mcencode(c.relname),
+    gp_toolkit.mcencode(pg_get_viewdef(c.oid))
 FROM pg_class c,pg_namespace n
 WHERE c.relnamespace=n.oid AND c.relkind='v' AND (n.oid >= 16384 OR n.nspname='public') AND n.nspname NOT LIKE E'pg\_temp\_%' AND n.nspname NOT LIKE E'pg\_toast\_temp\_%';};
 
-my $SQL_GET_INDEX = q{SELECT indrelid, c.relnamespace, replace(encode(textsend(pg_get_indexdef(indexrelid)),'base64'),chr(10),'')
+my $SQL_GET_INDEX = q{SELECT indrelid, c.relnamespace,gp_toolkit.mcencode(pg_get_indexdef(indexrelid))
 FROM pg_index i, pg_class c, pg_namespace n
 WHERE i.indrelid = c.oid AND c.relnamespace = n.oid AND c.oid >= 16384 AND (n.oid >= 16384 OR n.nspname='public') AND n.nspname NOT LIKE E'pg\_temp\_%' AND n.nspname NOT LIKE E'pg\_toast\_temp\_%';};
 
-my $SQL_GET_COMMENT = q{SELECT objoid,classoid,objsubid,replace(encode(textsend(description),'base64'),chr(10),'') FROM pg_description
+my $SQL_GET_COMMENT = q{SELECT objoid,classoid,objsubid,gp_toolkit.mcencode(description) FROM pg_description
     WHERE objoid >= 16384 AND NOT EXISTS(SELECT 1 FROM pg_partition_rule WHERE parchildrelid = objoid);};
 
 my $HELP_MESSAGE = qq#COMMAND NAME: $CMD_NAME
@@ -224,7 +278,15 @@ sub encode{
     return $encode;
 }
 sub decode{
-    return decode_base64($_[0]);
+    if(wantarray()){
+        my @rv = ();
+        for my $str(@_){
+            push @rv,decode_base64($str);
+        }
+        return @rv;
+    }else{
+        return decode_base64($_[0]);
+    }
 }
 sub quote{
     my ($ident) = @_;
@@ -317,6 +379,36 @@ sub getKeyWord{
     for my $row(@result){
         my ($word) = @$row;
         $KEY_WORD_SET{$word} = "";
+    }
+}
+sub checkLanguage{
+    my $result = queryResult("select 1 from pg_language where lanname='plpythonu';","Scalar");
+    if("" eq $result){
+        queryResult("create language plpythonu;");
+    }
+}
+sub checkEncodeFunction{
+    my @result = queryResult($ENCODE_FUNCTION_ARG_CHECK_SQL);
+    my $has_problem = 0;
+    my $result_size = @result;
+    my $check_size = @ENCODE_FUNCTION_ARG_CHECK_VALUE;
+    if($result_size != $check_size){
+        $has_problem = 1;
+    }else{
+        for my $index(0 .. $result_size - 1){
+            my ($arg,$md5) = @{$result[$index]};
+            if($arg ne $ENCODE_FUNCTION_ARG_CHECK_VALUE[$index] || $md5 ne $ENCODE_FUNCTION_SRC_CHECK_MD5[$index]){
+                $has_problem = 1;
+                last;
+            }
+        }
+    }
+    if($has_problem){
+        for my $row(@result){
+            my ($arg,$md5) = @$row;
+            queryResult("drop function if exists gp_toolkit.mcencode($arg);");
+        }
+        queryResult($ENCODE_FUNCTION_DDL);
     }
 }
 sub outputResourceQueue{
@@ -422,7 +514,8 @@ sub outputRoleSetting{
         $alter = $alter.("$super $rextgpfd $rexthttp $wextgpfd $rexthdfs $wexthdfs" eq "f f f f f f" ? " NOCREATEEXTTABLE" : "");
         output($alter.";");
         if("" ne $config){
-            for my $option(split(/$CMD_SPLIT/,$config)){
+            my @config_list = decode(split(/,/,$config));
+            for my $option(@config_list){
                 my ($key,$value) = split(/=/,$option,2);
                 ($key,$value) = (trim($key),"'".trim($value)."'");
                 output(qq{ALTER ROLE $rolname SET $key TO $value;});
@@ -457,12 +550,12 @@ sub outputLanguage{
             }
             output(qq{CREATE LANGUAGE $lanname;});
             if("" ne $lanacl){
-                for my $option(split(/$CMD_SPLIT/,$lanacl)){
-                    my ($role,$value) = split(/=/,$option,2);
+                for my $option(split(/,/,$lanacl)){
+                    my ($role,$value) = split(/:/,$option,2);
+                    ($role,$value) = (decode($role),decode($value));
                     if("" eq $role){
                         next;
                     }
-                    $role = quote($role);
                     $value =~ s/\/.*$//;
                     output("GRANT USAGE ON LANGUAGE $lanname TO $role;");
                 }
@@ -480,7 +573,7 @@ sub outputSchema{
     my $begin = 0;
     for my $row(@result){
         my ($oid,$nspname,$nspowner,$nspacl) = @$row;
-        ($nspname,$nspacl) = (quote(decode($nspname)),decode($nspacl));
+        ($nspname) = (quote(decode($nspname)));
         $MAP_OF_SCHEMA{$oid} = $nspname;
         $nspowner = $MAP_OF_ROLE{$nspowner};
         if(isTempSchema($nspname)){
@@ -500,12 +593,12 @@ sub outputSchema{
                 output(qq{ALTER SCHEMA $nspname OWNER TO $nspowner;});
             }
             if("" ne $nspacl){
-                for my $option(split(/$CMD_SPLIT/,$nspacl)){
-                    my ($role,$value) = split(/=/,$option,2);
+                for my $option(split(/,/,$nspacl)){
+                    my ($role,$value) = split(/:/,$option,2);
+                    ($role,$value) = (decode($role),decode($value));
                     if("" eq $role){
                         next;
                     }
-                    $role = quote($role);
                     $value =~ s/\/.*$//;
                     output("GRANT $auth_map{$value} ON SCHEMA $nspname TO $role;");
                 }
@@ -686,7 +779,7 @@ sub getArrayFromCommaSeparatedList{
     return @list;
 }
 sub getFunctionArgDef{
-    if($DATABASE_VERSION < 5){
+    if($DATABASE_VERSION < 5 || $TARGET_VERSION < 5){
         return;
     }
     my @result = queryResult($SQL_GET_FUNCTION_ARGDEF);
@@ -708,7 +801,7 @@ sub outputFunction{
     for my $row(@result){
         my ($oid,$proname,$pronamespace,$proowner,$prolang,$proisagg,$prosecdef,$proisstrict,$proretset,$provolatile,$pronargs,$prorettype,$proiswin,
             $proargtypes,$proallargtypes,$proargmodes,$proargnames,$prosrc,$probin,$proacl,$prodataaccess) = @$row;
-        ($proname,$proargnames,$prosrc,$proacl,$pronamespace) = (quote(decode($proname)),decode($proargnames),decode($prosrc),decode($proacl),$MAP_OF_SCHEMA{$pronamespace});
+        ($proname,$prosrc,$pronamespace) = (quote(decode($proname)),decode($prosrc),$MAP_OF_SCHEMA{$pronamespace});
         if(isTempSchema($pronamespace)){
             next;
         }
@@ -724,7 +817,7 @@ sub outputFunction{
         if($pronargs > 0){
             my @type_array = split(/,/,("" eq $proallargtypes ? $proargtypes : $proallargtypes));
             my @mode_array = split(/,/,$proargmodes);
-            my @name_array = split(/$CMD_SPLIT/,$proargnames);
+            my @name_array = decode(split(/,/,$proargnames));
             my @argument_array = ();
             my @argstype_array = ();
             for my $index(0 .. @type_array - 1){
@@ -752,12 +845,12 @@ sub outputFunction{
         $proowner = $MAP_OF_ROLE{$proowner};
         output(qq{ALTER FUNCTION $pronamespace.$proname($argstype) OWNER TO $proowner;});
         if("" ne $proacl){
-            for my $option(split(/$CMD_SPLIT/,$proacl)){
-                my ($role,$value) = split(/=/,$option,2);
+            for my $option(split(/,/,$proacl)){
+                my ($role,$value) = split(/:/,$option,2);
+                ($role,$value) = (decode($role),decode($value));
                 if("" eq $role){
                     next;
                 }
-                $role = quote($role);
                 $value =~ s/\/.*$//;
                 output("GRANT EXECUTE ON FUNCTION $pronamespace.$proname($arguments) TO $role;");
             }
@@ -775,7 +868,7 @@ sub outputSequence{
     my @query_array = ();
     for my $row(@result){
         my ($oid,$relnamespace,$relowner,$relname,$relacl) = @$row;
-        ($relname,$relacl,$relnamespace,$relowner) = (quote(decode($relname)),decode($relacl),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
+        ($relname,$relnamespace,$relowner) = (quote(decode($relname)),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
         $result[$all_index] = [($oid,$relnamespace,$relowner,$relname,$relacl)];
         ($index,$all_index) = ($index + 1,$all_index + 1);
         if(!isTempSchema($relnamespace)){
@@ -809,12 +902,12 @@ sub outputSequence{
         output($create_sql);
         output(qq{ALTER TABLE $relnamespace.$relname OWNER TO $relowner;});
         if("" ne $relacl){
-            for my $option(split(/$CMD_SPLIT/,$relacl)){
+            for my $option(split(/,/,$relacl)){
                 my ($role,$value) = split(/=/,$option,2);
+                ($role,$value) = (decode($role),decode($value));
                 if("" eq $role){
                     next;
                 }
-                $role = quote($role);
                 $value =~ s/\/.*$//;
                 if($role eq $relowner or $value eq "rwU"){
                     output("GRANT ALL ON SEQUENCE $relnamespace.$relname TO $role;");
@@ -884,7 +977,7 @@ sub getTableInformation{
     for my $row(@result){
         my ($oid,$relname,$relnamespace,$relowner,$reltablespace,$relhasindex,$relnatts,$relchecks,
             $relhasoids,$relhaspkey,$relhasrules,$relhassubclass,$relacl,$reloptions) = @$row;
-        ($relname,$relacl,$reloptions,$relnamespace,$relowner) = (quote(decode($relname)),decode($relacl),uc($reloptions),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
+        ($relname,$reloptions,$relnamespace,$relowner) = (quote(decode($relname)),uc($reloptions),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
         $MAP_OF_TABLE{$oid} = [($relname,$relnamespace,$relowner,$reltablespace,$relhasindex,$relnatts,$relchecks,$relhasoids,$relhaspkey,$relhasrules,$relhassubclass,$relacl,$reloptions)];
     }
 }
@@ -968,12 +1061,12 @@ sub getPartitionDefinition{
 sub getRelationAuth{
     my ($relnamespace,$relname,$relowner,$relacl) = @_;
     my @auth_array;
-    for my $acl(split(/$CMD_SPLIT/,$relacl)){
-        my ($role,$value) = split(/=/,$acl,2);
+    for my $acl(split(/,/,$relacl)){
+        my ($role,$value) = split(/:/,$acl,2);
+        ($role,$value) = (decode($role),decode($value));
         if("" eq $role){
             next;
         }
-        $role = quote($role);
         $value =~ s/\/.*$//;
         if($role eq $relowner or $value eq "arwdDxt"){
             push @auth_array,"GRANT ALL ON TABLE $relnamespace.$relname TO $role;";
@@ -1057,9 +1150,10 @@ sub getExtFormat{
     }
     for my $row(@result){
         my ($reloid,$location,$fmttype,$fmtopts,$command,$rejectlimit,$rejectlimittype,$fmterrtbl,$encoding,$writable) = @$row;
-        ($location,$fmtopts,$command) = (decode($location),decode($fmtopts),decode($command));
-        $location = [split(/$CMD_SPLIT\n/,$location)];
-        $MAP_OF_EXTTABLE_FMT{$reloid} = [($location,$fmttype,$fmtopts,$command,$rejectlimit,$rejectlimittype,$fmterrtbl,$encoding,$writable)];
+        ($fmtopts,$command) = (decode($fmtopts),decode($command));
+        my @location_list = split(/,/,$location);
+        @location_list = decode(@location_list);
+        $MAP_OF_EXTTABLE_FMT{$reloid} = [([@location_list],$fmttype,$fmtopts,$command,$rejectlimit,$rejectlimittype,$fmterrtbl,$encoding,$writable)];
     }
 }
 sub outputExtTable{
@@ -1067,7 +1161,7 @@ sub outputExtTable{
     my $begin = 0;
     for my $row(@result){
         my ($oid,$relname,$relnamespace,$relowner,$relnatts,$relacl) = @$row;
-        ($relname,$relacl,$relnamespace) = (quote(decode($relname)),decode($relacl),$MAP_OF_SCHEMA{$relnamespace});
+        ($relname,$relnamespace) = (quote(decode($relname)),$MAP_OF_SCHEMA{$relnamespace});
         if(isTempSchema($relnamespace)){
             next;
         }elsif(!exists $MAP_OF_ATTRIBUTE{$oid."-"."1"} || !exists $MAP_OF_ATTRIBUTE{$oid."-".$relnatts}){
@@ -1198,7 +1292,7 @@ sub outputView{
     my @temp_depth_array;
     for my $row(@result){
         my ($relnamespace,$oid,$relowner,$relacl,$relname,$viewdef) = @$row;
-        ($relacl,$relname,$viewdef,$relnamespace,$relowner) = (decode($relacl),quote(decode($relname)),decode($viewdef),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
+        ($relname,$viewdef,$relnamespace,$relowner) = (quote(decode($relname)),decode($viewdef),$MAP_OF_SCHEMA{$relnamespace},$MAP_OF_ROLE{$relowner});
         my $depth = $MAP_OF_VIEW_DEPTH{$oid};
         if("" eq $depth){
             $depth = 0;
@@ -1319,6 +1413,8 @@ sub main{
     checkOption();
     getVersion();
     getKeyWord();
+    checkLanguage();
+    checkEncodeFunction();
     outputResourceQueue();
     outputRole();
     outputTablespace();
