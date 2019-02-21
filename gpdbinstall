@@ -18,7 +18,7 @@ my @NEED_COMMAND = ("ip","zip","unzip","bash","tar","sed","perl","expect","ssh",
 
 my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$IGNORE_INIT,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
 my (@MASTER_CONFIG,@STANDBY_CONFIG,@ALLHOST_CONFIG_ARRAY,@SEG_INSTALL_CONFIG_ARRAY);
-my ($CLUSTER_EXISTS,$INSTALL_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMIN_NAME);
+my ($CLUSTER_EXISTS,$INSTALL_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMIN_NAME,$GP_ADMIN_PASSWD);
 my ($COMMAND_FILE_NAME) = ($WORK_PATH."/install_command.sh");
 
 my $HELP_MESSAGE = qq#COMMAND NAME: $CMD_NAME
@@ -36,6 +36,7 @@ SYNOPSIS
 $CMD_NAME --hosts-config <filename>
     [--password <current user password>]
     [--gp-admin-name <gp admin user name>]
+    [--gp-admin-passwd <gp admin user passwd>]
     --install-file <greenplum binary file>
     --gp-version <greenplum version>
     --mas-dev <device or directory for master>
@@ -95,6 +96,11 @@ OPTIONS
   Use user name as greenplum database's admin user.
   If install user is root, default user is gpadmin.
   If install user is not root, default user is current user.
+
+--gp-admin-passwd <user passwd>
+
+  Set the gpadmin database's admin user's password.
+  If not specify this parameter, use the user name as password.
 
 --install-file <greenplum binary file>
 
@@ -181,18 +187,19 @@ OPTIONS
   Format:
   name=value
   Like:
-  hosts-config  = hosts-config
-  gp-admin-name = gpadmin
-  install-file  = greenplum-db-5.9.0-rhel7-x86_64.zip
-  mas-dev       = /data
-  seg-dev       = /data1
-  seg-dev       = /data2
-  user-id       = 500
-  segs-per-disk = 2
-  prefix        = gpseg
-  mas-port      = 5432
-  port-base     = 40000
-  mirror-split  = 2
+  hosts-config    = hosts-config
+  gp-admin-name   = gpadmin
+  gp-admin-passwd = gpadminpasswd
+  install-file    = greenplum-db-5.9.0-rhel7-x86_64.zip
+  mas-dev         = /data
+  seg-dev         = /data1
+  seg-dev         = /data2
+  user-id         = 500
+  segs-per-disk   = 2
+  prefix          = gpseg
+  mas-port        = 5432
+  port-base       = 40000
+  mirror-split    = 2
   verbose
 
 [-h|--help]
@@ -214,6 +221,17 @@ sub encode{
     my $encode = encode_base64($string);
     $encode =~ s/\n//g;
     return $encode;
+}
+sub decode{
+    if(wantarray()){
+        my @rv = ();
+        for my $str(@_){
+            push @rv,decode_base64($str);
+        }
+        return @rv;
+    }else{
+        return decode_base64($_[0]);
+    }
 }
 sub printMessage{
     my ($flag,$message) = @_;
@@ -298,6 +316,7 @@ sub getOption{
         'hosts-config:s'      => \$HOSTS_CONFIG,
         'password:s'          => \$PASSWORD,
         'gp-admin-name:s'     => \$GP_ADMIN_NAME,
+        'gp-admin-passwd:s'   => \$GP_ADMIN_PASSWD,
         'install-file:s'      => \$INSTALL_FILE,
         'gp-version:s'        => \$GP_VERSION,
         'mas-dev:s'           => \$MASTER_DEV,
@@ -325,22 +344,23 @@ sub getOption{
         for my $line(@parameter_list){
             my ($para,$val) = split(/=/,$line,2);
             ($para,$val) = (trim($para),trim($val));
-            if("hosts-config"  eq $para  && "" eq $HOSTS_CONFIG  ){$HOSTS_CONFIG    = $val;}
-            if("password"      eq $para  && "" eq $PASSWORD      ){$PASSWORD        = $val;}
-            if("gp-admin-name" eq $para  && "" eq $GP_ADMIN_NAME ){$GP_ADMIN_NAME   = $val;}
-            if("install-file"  eq $para  && "" eq $INSTALL_FILE  ){$INSTALL_FILE    = $val;}
-            if("gp-version"    eq $para  && "" eq $GP_VERSION    ){$GP_VERSION      = $val;}
-            if("mas-dev"       eq $para  && "" eq $MASTER_DEV    ){$MASTER_DEV      = $val;}
-            if("seg-dev"       eq $para                          ){push @SEGMENT_DEV, $val;}
-            if("user-id"       eq $para  && "" eq $USER_ID       ){$USER_ID         = $val;}
-            if("segs-per-disk" eq $para  && "" eq $SEGS_PER_DISK ){$SEGS_PER_DISK   = $val;}
-            if("prefix"        eq $para  && "" eq $PREFIX        ){$PREFIX          = $val;}
-            if("mas-port"      eq $para  && "" eq $MASTER_PORT   ){$MASTER_PORT     = $val;}
-            if("port-base"     eq $para  && "" eq $PORT_BASE     ){$PORT_BASE       = $val;}
-            if("mirror-split"  eq $para  && "" eq $MIRROR_SPLIT  ){$MIRROR_SPLIT    = $val;}
-            if("ignore-init"   eq $para  && "" eq $IGNORE_INIT   ){$IGNORE_INIT     = 1   ;}
-            if(("verbose"      eq $para  ||
-                "v"            eq $para) && "" eq $VERBOSE       ){$VERBOSE         = 1   ;}
+            if("hosts-config"    eq $para  && "" eq $HOSTS_CONFIG    ){$HOSTS_CONFIG    = $val;}
+            if("password"        eq $para  && "" eq $PASSWORD        ){$PASSWORD        = $val;}
+            if("gp-admin-name"   eq $para  && "" eq $GP_ADMIN_NAME   ){$GP_ADMIN_NAME   = $val;}
+            if("gp-admin-passwd" eq $para  && "" eq $GP_ADMIN_PASSWD ){$GP_ADMIN_PASSWD = $val;}
+            if("install-file"    eq $para  && "" eq $INSTALL_FILE    ){$INSTALL_FILE    = $val;}
+            if("gp-version"      eq $para  && "" eq $GP_VERSION      ){$GP_VERSION      = $val;}
+            if("mas-dev"         eq $para  && "" eq $MASTER_DEV      ){$MASTER_DEV      = $val;}
+            if("seg-dev"         eq $para                            ){push @SEGMENT_DEV, $val;}
+            if("user-id"         eq $para  && "" eq $USER_ID         ){$USER_ID         = $val;}
+            if("segs-per-disk"   eq $para  && "" eq $SEGS_PER_DISK   ){$SEGS_PER_DISK   = $val;}
+            if("prefix"          eq $para  && "" eq $PREFIX          ){$PREFIX          = $val;}
+            if("mas-port"        eq $para  && "" eq $MASTER_PORT     ){$MASTER_PORT     = $val;}
+            if("port-base"       eq $para  && "" eq $PORT_BASE       ){$PORT_BASE       = $val;}
+            if("mirror-split"    eq $para  && "" eq $MIRROR_SPLIT    ){$MIRROR_SPLIT    = $val;}
+            if("ignore-init"     eq $para  && "" eq $IGNORE_INIT     ){$IGNORE_INIT     = 1   ;}
+            if(("verbose"        eq $para  ||
+                "v"              eq $para) && "" eq $VERBOSE         ){$VERBOSE         = 1   ;}
         }
     }
 }
@@ -353,6 +373,9 @@ sub checkEnvironment{
             $GP_ADMIN_NAME = $CURRENT_USER_NAME;
         }
         logMessage("WARN","Not specify parameter: --gp-admin-user, will use default user:\n".$GP_ADMIN_NAME);
+    }
+    if($GP_ADMIN_PASSWD eq ""){
+        $GP_ADMIN_PASSWD = $GP_ADMIN_NAME;
     }
     readpipe(qq{timeout -s 9 1 sudo date});
     my $sudoCode = $?;
@@ -442,6 +465,10 @@ sub checkOption{
         $PASSWORD = <STDIN>;
         $PASSWORD = trim($PASSWORD);
     }
+    if($CURRENT_USER_NAME eq $GP_ADMIN_NAME){
+        $GP_ADMIN_PASSWD = $PASSWORD;
+    }
+    $GP_ADMIN_PASSWD = encode($GP_ADMIN_PASSWD);
 }
 sub checkHostsConfig{
     logMessage("INFO","Check host config".("." x 16));
@@ -598,7 +625,7 @@ sub modifySystemConfig{
         }
         my $command = qq{scp -q $COMMAND_FILE_NAME $ip:$COMMAND_FILE_NAME};
         executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
-        $command = qq{ssh $ip -T "sudo sh $COMMAND_FILE_NAME $hostname $GP_ADMIN_NAME $USER_ID $mode $device"};
+        $command = qq{ssh $ip -T "sudo sh $COMMAND_FILE_NAME '$hostname' '$GP_ADMIN_NAME' '$GP_ADMIN_PASSWD' '$USER_ID' '$mode' '$device'"};
         my $output = executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
         my @array = split(/\n/,trim($output));
         my $path;
@@ -643,8 +670,8 @@ sub installThread{
     my $encode_cmd = encode(qq{if [ -e /usr/local/greenplum-db-$INSTALL_VERSION ];then
 cd /usr/local/
 sudo rm -f greenplum-db > /dev/null 2>&1
-sudo ln -s greenplum-db-$INSTALL_VERSION greenplum-db > /dev/null 2>&1
-sudo chown -R $GP_ADMIN_NAME. greenplum* > /dev/null 2>&1
+sudo ln -s greenplum-db-$INSTALL_VERSION greenplum-db
+sudo chown -R $GP_ADMIN_NAME. ./greenplum* > /dev/null 2>&1
 echo EXISTS
 fi});
     my $command = qq{ssh $hostname -T "echo $encode_cmd|base64 -di|bash"};
@@ -654,8 +681,8 @@ fi});
     }
     $command = qq{scp -q /tmp/greenplum-db.install.tmp.tar $hostname:/tmp/greenplum-db.install.tar};
     executeWithExpect($command,0,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
-    $command = qq{ssh $hostname -T "cd /usr/local/;sudo tar -xf /tmp/greenplum-db.install.tar;sudo rm -f greenplum-db;};
-    $command = $command.qq{sudo ln -s greenplum-db-$INSTALL_VERSION greenplum-db;sudo chown -R $GP_ADMIN_NAME. greenplum*;sudo rm -f /tmp/greenplum-db.install.tar"};
+    $command = qq{ssh $hostname -T "cd /usr/local/;sudo rm -fr greenplum-db-$INSTALL_VERSION;sudo rm -f greenplum-db;sudo tar -xf /tmp/greenplum-db.install.tar;};
+    $command = $command.qq{sudo ln -s greenplum-db-$INSTALL_VERSION ./greenplum-db;sudo chown -R $GP_ADMIN_NAME. greenplum*;sudo rm -f /tmp/greenplum-db.install.tar"};
     executeWithExpect($command,1,([["yes/no","yes"],["password",$PASSWORD],["*#"]]));
 }
 sub installBinary{
@@ -680,6 +707,7 @@ sub installBinary{
         }else{
             errorMessage("Can't get version infomation from install file:\n".$INSTALL_FILE);
         }
+        system(qq{sudo rm -f /usr/local/greenplum-db/greenplum-db-*});
     }
     my $env_file = "/usr/local/greenplum-db-$INSTALL_VERSION/greenplum_path.sh";
     if(!-f $env_file){
@@ -724,7 +752,7 @@ sub createSegmentFile{
 sub exchangeGpadminKey{
     logMessage("INFO","Exchange key for $GP_ADMIN_NAME");
     my $command = qq{sudo su - $GP_ADMIN_NAME -c ". /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1;gpssh-exkeys -f $WORK_PATH/all_hosts"};
-    executeWithExpect($command,0,([["password",$GP_ADMIN_NAME,1],["*#"]]));
+    executeWithExpect($command,0,([["password",decode($GP_ADMIN_PASSWD),1],["*#"]]));
 }
 sub initGpSystem{
     if($IGNORE_INIT){
@@ -746,7 +774,7 @@ sub initGpSystem{
     my $data_directory = "declare -a DATA_DIRECTORY=(";
     for my $path(@SEGMENT_DEV){
         for my $idx(1 .. $SEGS_PER_DISK){
-            $data_directory = $data_directory."$path/primary/default "
+            $data_directory = $data_directory."$path/primary/default ";
         }
     }
     my ($m_ip,$m_hostname) = @MASTER_CONFIG;
@@ -763,7 +791,7 @@ sub initGpSystem{
         print $init_handle $line."\n";
     }
     close $init_handle;
-    my $output = readpipe(qq{sudo chown $GP_ADMIN_NAME. $WORK_PATH/gpinitsystem_config});
+    my $output = readpipe(qq{sudo chmod 777 $WORK_PATH/gpinitsystem_config});
     system(qq{sudo su - $GP_ADMIN_NAME -c "rm -f gpAdminLogs/gpinitsystem_*.log"});
     my $command = qq{sudo su - $GP_ADMIN_NAME -c "gpinitsystem -a --lc-collate=C -c $WORK_PATH/gpinitsystem_config -h $WORK_PATH/all_segs_install"};
     logMessage("INFO","Execute command:\n".$command);
@@ -976,6 +1004,7 @@ sub main{
     addMirror();
     addGPFileSpace();
     addStandby();
+    logMessage("INFO",q{All gp admin user's password modified to }.decode($GP_ADMIN_PASSWD));
 }
 my $command_string = $0." ".join(" ",@ARGV);
 $| = 1;
@@ -987,9 +1016,10 @@ ____CONFIG_COMMAND_SHELL_START____
 cd $(cd "$(dirname "$0")"; pwd)
 HSNM=$1
 USNM=$2
-USID=$3
-MODE=$4
-DEVC=$5
+PSWD=$3
+USID=$4
+MODE=$5
+DEVC=$6
 Directorys=""
 ##################################################################################
 CURRENT_USER=`whoami`
@@ -1123,9 +1153,7 @@ fi
 groupadd -r -g $USID $USNM                                                        > /dev/null 2>&1
 useradd -r -m -g $USNM -u $USID $USNM                                             > /dev/null 2>&1
 exitcode=$?
-if [ $exitcode == 0 ];then
-    echo $USNM|passwd --stdin $USNM                                               > /dev/null 2>&1
-fi
+echo $PSWD|base64 -d|passwd --stdin $USNM                                         > /dev/null 2>&1
 id $USNM                                                                          > /dev/null 2>&1
 exitcode=$?
 if [ $exitcode != 0 ];then
