@@ -1050,7 +1050,7 @@ sub generateSrcHostMap{
     }
     for my $line(readLineFromFile($SRC_MAPFILE)){
         my ($hostname,$ip_address) = split(/,/,$line);
-        $SRC_HOSTMAP{lc(trim($hostname))} = trim($ip_address);
+        $SRC_HOSTMAP{trim($hostname)} = trim($ip_address);
     }
 }
 sub generateSrcClusterInfo{
