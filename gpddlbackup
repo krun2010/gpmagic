@@ -1093,6 +1093,9 @@ sub outputTable{
         }elsif(!exists $MAP_OF_DISTRIBUTION{$oid}){
             outwarn("Table $relnamespace.$relname has no correct distribution key");
             next;
+        }elsif("t" eq $relhassubclass && !exists $MAP_OF_PARTITION{$oid}){
+            outwarn("Partition table $relnamespace.$relname has no subpartition infomation");
+            next;
         }
         if($begin == 0){
             output($REGION_START.$TAIL_Table);
