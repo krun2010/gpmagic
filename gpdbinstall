@@ -682,7 +682,7 @@ fi});
     $command = qq{scp -q /tmp/greenplum-db.install.tmp.tar $hostname:/tmp/greenplum-db.install.tar};
     executeWithExpect($command,0,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
     $command = qq{ssh $hostname -T "cd /usr/local/;sudo rm -fr greenplum-db-$INSTALL_VERSION;sudo rm -f greenplum-db;sudo tar -xf /tmp/greenplum-db.install.tar;};
-    $command = $command.qq{sudo ln -s greenplum-db-$INSTALL_VERSION ./greenplum-db;sudo chown -R $GP_ADMIN_NAME. greenplum*;sudo rm -f /tmp/greenplum-db.install.tar"};
+    $command = $command.qq{sudo ln -s greenplum-db-$INSTALL_VERSION greenplum-db;sudo chown -R $GP_ADMIN_NAME. greenplum*;sudo rm -f /tmp/greenplum-db.install.tar"};
     executeWithExpect($command,1,([["yes/no","yes"],["password",$PASSWORD],["*#"]]));
 }
 sub installBinary{
