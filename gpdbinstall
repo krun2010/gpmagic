@@ -625,7 +625,7 @@ sub modifySystemConfig{
         }
         my $command = qq{scp -q $COMMAND_FILE_NAME $ip:$COMMAND_FILE_NAME};
         executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
-        $command = qq{ssh $ip -T "sudo sh $COMMAND_FILE_NAME '$hostname' '$GP_ADMIN_NAME' '$GP_ADMIN_PASSWD' '$USER_ID' '$mode' '$device'"};
+        $command = qq{ssh $ip -T "sudo sh $COMMAND_FILE_NAME '$hostname' '$GP_ADMIN_NAME' '$GP_ADMIN_PASSWD' '$USER_ID' '$mode' '$MASTER_PORT' '$device'"};
         my $output = executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
         my @array = split(/\n/,trim($output));
         my $path;
@@ -1019,7 +1019,8 @@ USNM=$2
 PSWD=$3
 USID=$4
 MODE=$5
-DEVC=$6
+MSPT=$6
+DEVC=$7
 Directorys=""
 ##################################################################################
 CURRENT_USER=`whoami`
@@ -1201,8 +1202,10 @@ if [ $MODE == "M" ];then
     masterpath=${array[0]}
     sed -e /greenplum_path.sh/d                                            -i /home/gpadmin/.bashrc
     sed -e /MASTER_DATA_DIRECTORY/d                                        -i /home/gpadmin/.bashrc
+    sed -e /PGPORT/d                                                       -i /home/gpadmin/.bashrc
     echo '. /usr/local/greenplum-db/greenplum_path.sh'                     >> /home/gpadmin/.bashrc
     echo "export MASTER_DATA_DIRECTORY=$masterpath/master/default/gpseg-1" >> /home/gpadmin/.bashrc
+    echo "export PGPORT=$MSPT"                                             >> /home/gpadmin/.bashrc
 fi
 ##################################################################################
 echo "####----"$Directorys
