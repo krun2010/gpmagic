@@ -1194,6 +1194,7 @@ sub outputExtTable{
         if("" eq $command){
             $create = $create."LOCATION(\n$INDENT'".join("',\n$INDENT'",@$location)."'\n)";
         }else{
+            $command =~ s/'/''/g;
             $create = $create."EXECUTE '$command' ";
             my ($on_host,$on_value) = @$location;
             if($on_host eq "ALL_SEGMENTS"){
