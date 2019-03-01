@@ -1094,7 +1094,7 @@ sub outputTable{
             outwarn("Table $relnamespace.$relname has no correct distribution key");
             next;
         }elsif("t" eq $relhassubclass && !exists $MAP_OF_PARTITION{$oid}){
-            outwarn("Partition table $relnamespace.$relname has no subpartition infomation");
+            outwarn("Partition table $relnamespace.$relname has no subpartition information");
             next;
         }
         if($begin == 0){
