@@ -517,7 +517,10 @@ sub outputRoleSetting{
             my @config_list = decode(split(/,/,$config));
             for my $option(@config_list){
                 my ($key,$value) = split(/=/,$option,2);
-                ($key,$value) = (trim($key),"'".trim($value)."'");
+                ($key,$value) = (trim($key),trim($value));
+                if($key ne "search_path" && $key ne "DateStyle"){
+                    $value = "'".$value."'";
+                }
                 output(qq{ALTER ROLE $rolname SET $key TO $value;});
             }
         }
