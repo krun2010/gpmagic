@@ -3,8 +3,8 @@
 作者：
 陈淼
 邮箱：
-miaochen@mail.ustc.edu.cn
-伸手党请绕行    
+miaochen@mail.ustc.edu.cn    
+发现BUG请直接在线提交BUG  
 
 使用备份恢复命令，请将  
 gpddlbackup  
@@ -16,6 +16,7 @@ gpmcrestore
 [gpadmin@mdw bin]$ chown gpadmin. gp{mc,ddl}*  
 [gpadmin@mdw bin]$ chmod 755 gp{mc,ddl}*  
 使用说明可以参考命令的help信息和word文档  
+gpddlbackup已经经过较大范围验证，但存在BUG的可能性还较大，欢迎测试  
 
 使用跨集群数据传输命令，请将  
 gpdbtransfer  
