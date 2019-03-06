@@ -1029,15 +1029,6 @@ if [ $CURRENT_USER != "root" ];then
     exit 1
 fi
 ##################################################################################
-for command in "zip" "unzip" "bash" "tar" "sed" "perl" "ssh" "ifconfig" "mkfs.xfs";do
-    which $command                                                                > /dev/null 2>&1
-    exitcode=$?
-    if [ $exitcode != 0 ];then
-        echo "Environment not enough to continue install, command $command not found in current environment"
-        exit 2
-    fi
-done
-##################################################################################
 IS_RHEL=0
 IS_SuSE=0
 RHEL_VERSION=0
@@ -1050,6 +1041,23 @@ fi
 if [[ $IS_RHEL == 0 && $IS_SuSE == 0 ]];then
     echo "Unsupported operating systems."
     exit 3
+fi
+##################################################################################
+missingcmd=""
+for command in "zip" "unzip" "bash" "tar" "sed" "perl" "ssh" "ifconfig" "mkfs.xfs";do
+    which $command                                                                > /dev/null 2>&1
+    exitcode=$?
+    if [ $exitcode != 0 ];then
+        if [ $missingcmd == "" ];then
+            missingcmd=$command
+        else
+            missingcmd=$missingcmd","$command
+        fi
+    fi
+done
+if [ $missingcmd!="" ];then
+    echo "Environment not enough to continue install, commands missingcmd not found"
+    exit 2
 fi
 ##################################################################################
 if [ $IS_RHEL == 1 ];then
@@ -1206,6 +1214,41 @@ if [ $MODE == "M" ];then
     echo '. /usr/local/greenplum-db/greenplum_path.sh'                     >> /home/gpadmin/.bashrc
     echo "export MASTER_DATA_DIRECTORY=$masterpath/master/default/gpseg-1" >> /home/gpadmin/.bashrc
     echo "export PGPORT=$MSPT"                                             >> /home/gpadmin/.bashrc
+fi
+##################################################################################
+mkdir /etc/cgconfig.d                                                             > /dev/null 2>&1
+touch /etc/cgconfig.d/gpdb.conf                                                   > /dev/null 2>&1
+echo "group gpdb {
+     perm {
+         task {
+             uid = $USNM;
+             gid = $USNM;
+         }
+         admin {
+             uid = $USNM;
+             gid = $USNM;
+         }
+     }
+     cpu {
+     }
+     cpuacct {
+     }
+     memory {
+     }
+     cpuset {
+     }
+ }" > /etc/cgconfig.d/gpdb.conf
+if [ $IS_RHEL == 1 ];then
+    if [ $RHEL_VERSION == 7 ];then
+        cgconfigparser -l /etc/cgconfig.d/gpdb.conf                               > /dev/null 2>&1
+        systemctl enable cgconfig.service                                         > /dev/null 2>&1
+    else
+        service cgconfig start                                                    > /dev/null 2>&1
+        chkconfig cgconfig on                                                     > /dev/null 2>&1
+    fi
+elif [ $IS_SuSE == 1 ];then
+    cgconfigparser -l /etc/cgconfig.d/gpdb.conf                                   > /dev/null 2>&1
+    systemctl enable cgconfig.service                                             > /dev/null 2>&1
 fi
 ##################################################################################
 echo "####----"$Directorys

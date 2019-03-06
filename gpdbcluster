@@ -241,7 +241,7 @@ sub checkOption{
     }
 }
 sub firstCheck{
-    my ($output,$code) = executeCommand(qq{cat /etc/sudoers|grep 'Defaults.*requiretty'|tee});
+    my ($output,$code) = executeCommand(qq{sudo cat /etc/sudoers|grep 'Defaults.*requiretty'|tee});
     if($output ne "" && !($output =~ /^#/)){
         errorMessage("You should modify the /etc/sudoers file to disable require tty like:\n#Defaults    requiretty");
     }
@@ -301,7 +301,7 @@ sub stopProgress{
             last;
         }
         if("" ne $pid){
-            system(qq{kill $pid});
+            system(qq{sudo kill $pid});
         }else{
             last;
         }
@@ -320,7 +320,7 @@ sub stopProgress{
         for my $times(1 .. 3){
             my ($pid,$code) = executeCommand($pid_check);
             if("" ne $pid){
-                system(qq{ssh $STANDBY_HOST -T "kill -9 $pid"});
+                system(qq{ssh $STANDBY_HOST -T "sudo kill -9 $pid"});
             }else{
                 last;
             }
@@ -346,7 +346,7 @@ sub setVirtualIP{
         if($output ne ""){
             my ($curr_ip,$curr_mask,$curr_dev) = split(/:/,$output);
             logMessage("INFO","Try to delete virtual ipaddress: ip addr del $curr_ip/$curr_mask dev $curr_dev");
-            system(qq{ip addr del $curr_ip/$curr_mask dev $curr_dev});
+            system(qq{sudo ip addr del $curr_ip/$curr_mask dev $curr_dev});
         }
     }
 }
@@ -438,7 +438,7 @@ sub executeResource{
         return;
     }
     if("" ne $RESOURCE){
-        my ($output,$code) = executeCommand(qq{timeout -s 9 $COMMAND_TIMEOUT ssh $hostname -T "$RESOURCE $operation"});
+        my ($output,$code) = executeCommand(qq{timeout -s 9 $COMMAND_TIMEOUT ssh $hostname -T "sudo $RESOURCE $operation"});
         if($code == 0){
             logMessage("INFO","Execute $RESOURCE $operation on $hostname success");
         }else{
@@ -465,7 +465,7 @@ sub stopRMaster{
     if($code == 0){
         if($FORCE_REBOOT){
             logMessage("WARN","Remote master is still alive, try to force reboot it");
-            ($output,$code) = executeCommand(qq{timeout $COMMAND_TIMEOUT ssh $MASTER_HOST -T "nohup sh -c 'sleep 1;echo 1 > /proc/sys/kernel/sysrq;echo b > /proc/sysrq-trigger' 2>&1 > /dev/null &"});
+            ($output,$code) = executeCommand(qq{timeout $COMMAND_TIMEOUT ssh $MASTER_HOST -T "nohup sudo sh -c 'sleep 1;echo 1 > /proc/sys/kernel/sysrq;echo b > /proc/sysrq-trigger' 2>&1 > /dev/null &"});
             sleep 3;
             ($output,$code) = executeCommand(qq{ping $MASTER_HOST -c 1 -w 1});
             if($code == 0){
@@ -534,9 +534,9 @@ sub main{
     getOption();
     checkOption();
     logMessage("INFO","Run command: ".$_[0]);
-    my ($username,$code) = executeCommand("whoami");
-    if($username ne "root"){
-        errorMessage("You must run this command with root user");
+    my ($output,$code) = executeCommand("timeout -s 9 1 sudo date");
+    if($code != 0){
+        errorMessage("You must run this command use user which can sudo without password");
     }
     firstCheck();
     if($STATUS){
