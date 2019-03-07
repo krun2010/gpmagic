@@ -1054,8 +1054,8 @@ for command in "zip" "unzip" "bash" "tar" "sed" "perl" "ssh" "ifconfig" "mkfs.xf
         fi
     fi
 done
-if [ $missingcmd!="" ];then
-    echo "Environment not enough to continue install, commands missingcmd not found"
+if [ "$missingcmd" != "" ];then
+    echo "Environment not enough to continue install, commands $missingcmd not found"
     exit 2
 fi
 ##################################################################################
