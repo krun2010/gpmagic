@@ -1208,9 +1208,7 @@ done
 if [ $MODE == "M" ];then
     array=($Directorys)
     masterpath=${array[0]}
-    sed -e /greenplum_path.sh/d                                            -i /home/gpadmin/.bashrc
-    sed -e /MASTER_DATA_DIRECTORY/d                                        -i /home/gpadmin/.bashrc
-    sed -e /PGPORT/d                                                       -i /home/gpadmin/.bashrc
+    sed -e /greenplum_path.sh/d -e /MASTER_DATA_DIRECTORY/d -e /PGPORT/d   -i /home/gpadmin/.bashrc
     echo '. /usr/local/greenplum-db/greenplum_path.sh'                     >> /home/gpadmin/.bashrc
     echo "export MASTER_DATA_DIRECTORY=$masterpath/master/default/gpseg-1" >> /home/gpadmin/.bashrc
     echo "export PGPORT=$MSPT"                                             >> /home/gpadmin/.bashrc
