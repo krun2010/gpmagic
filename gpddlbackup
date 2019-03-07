@@ -1146,6 +1146,49 @@ sub outputTable{
         output($REGION_END.$TAIL_Table);
     }
 }
+sub formatFmtOpts{
+    my ($fmttype,$fmtopts) = @_;
+    if($fmtopts eq ""){
+        return "";
+    }
+    $fmtopts =~ s/\\/\\\\/g;
+    $fmtopts =~ s/\t/\\t/g;
+    $fmtopts =~ s/\n/\\n/g;
+    my @array = split(//,$fmtopts);
+    my $result = "";
+    my $inSingleQuote = 0;
+    my $item = "";
+    my $index = 0;
+    my $size = @array;
+    for my $curr(@array){
+        $index ++;
+        $item = $item.$curr;
+        if($curr eq "'"){
+            $inSingleQuote = !$inSingleQuote;
+        }
+        if(!$inSingleQuote && ($curr eq ' ' || $index == $size)){
+            $item = trim($item);
+            if($item =~ /\\/){
+                $item = "E".$item;
+            }
+            if($item =~ /^'/){
+                if($fmttype eq "b"){
+                   $result = $result." = ".$item.",";
+                }else{
+                   $result = $result." ".$item;
+                }
+            }else{
+                $result = $result." ".$item;
+            }
+            $item = "";
+        }
+    }
+    if($inSingleQuote){
+        errorMessage("Can not split:\n".$fmtopts);
+    }
+    $result =~ s/,$//;
+    return trim($result);
+}
 sub getExtFormat{
     my $check = queryResult($SQL_GET_EXTTABLE_TYPE,"Scalar");
     my @result;
@@ -1159,6 +1202,7 @@ sub getExtFormat{
         ($fmtopts,$command) = (decode($fmtopts),decode($command));
         my @location_list = split(/,/,$location);
         @location_list = decode(@location_list);
+        $fmtopts = formatFmtOpts($fmttype,$fmtopts);
         $MAP_OF_EXTTABLE_FMT{$reloid} = [([@location_list],$fmttype,$fmtopts,$command,$rejectlimit,$rejectlimittype,$fmterrtbl,$encoding,$writable)];
     }
 }
@@ -1218,14 +1262,6 @@ sub outputExtTable{
             $create = $create.$on_host;
         }
         $create = $create."\nFORMAT '".$EXT_FORMAT_TYPE_MAP{$fmttype}."'";
-        $fmtopts =~ s/\n/\\n/g;
-        if($fmttype eq "b"){
-            $fmtopts =~ s/( '[^\']*')/ = $& ,/g;
-            $fmtopts =~ s/,\s+$//;
-        }
-        $fmtopts =~ s/\\/\\\\/g;
-        $fmtopts =~ s/\t/\\t/g;
-        $fmtopts =~ s/ '/ E'/g;
         $create = $create."(\n$fmtopts\n)";
         $create = $create."\n"."ENCODING '".$encoding."'";
         if("" ne $fmterrtbl || "" ne $rejectlimit){
@@ -1384,6 +1420,9 @@ sub outputComment{
                 $output = qq{COMMENT ON TABLE $namespace.$t_relname IS '$description';};
             }else{
                 my $key = $objoid."-".$objsubid;
+                if(! exists $MAP_OF_ATTRIBUTE{$key}){
+                    next;
+                }
                 my ($attname) = @{$MAP_OF_ATTRIBUTE{$key}};
                 $output = qq{COMMENT ON COLUMN $namespace.$t_relname.$attname IS '$description';};
             }
