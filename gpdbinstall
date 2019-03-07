@@ -1047,7 +1047,7 @@ for command in "zip" "unzip" "bash" "tar" "sed" "perl" "ssh" "ifconfig" "mkfs.xf
     which $command                                                                > /dev/null 2>&1
     exitcode=$?
     if [ $exitcode != 0 ];then
-        if [ $missingcmd == "" ];then
+        if [ "$missingcmd" == "" ];then
             missingcmd=$command
         else
             missingcmd=$missingcmd","$command
