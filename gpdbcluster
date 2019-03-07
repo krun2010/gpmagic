@@ -181,9 +181,9 @@ sub masterStatus{
             $checkCommand = "$PRESQL;psql -qtAX -p $PGPORT template1 -c 'select 1;'";
         }
         if("" eq $remote){
-            ($output,$code) = executeCommand(qq{timeout -s 9 $SQL_TIMEOUT sudo -u $PGUSER sh -c               "$checkCommand" 2>&1});
+            ($output,$code) = executeCommand(qq{sudo timeout -s 9 $SQL_TIMEOUT sudo -u $PGUSER sh -c               "$checkCommand" 2>&1});
         }else{
-            ($output,$code) = executeCommand(qq{timeout -s 9 $SQL_TIMEOUT sudo -u $PGUSER ssh $MASTER_HOST -T "$checkCommand" 2>&1});
+            ($output,$code) = executeCommand(qq{sudo timeout -s 9 $SQL_TIMEOUT sudo -u $PGUSER ssh $MASTER_HOST -T "$checkCommand" 2>&1});
         }
         if($output =~ /FATAL:.*too many clients/ || $output =~ /FATAL:.*too many connections/){
             logMessage("WARN","Occur too many connections error, will ignore it, please check the database status");
@@ -293,7 +293,7 @@ EOF"});
 sub stopProgress{
     logMessage("INFO","Try to stop exists progress");
     my $current_pid = int($MAIN_PID);
-    my $pid_check = qq{ps ax|grep -w $CMD_NAME|grep -vw grep|grep -vw $current_pid|head -n 1|}.q(awk '{print $1}');
+    my $pid_check = qq{sudo ps ax|grep -w $CMD_NAME|grep -vw grep|grep -vw $current_pid|head -n 1|}.q(awk '{print $1}');
     for my $times(1 .. 3){
         my ($pid,$code) = executeCommand($pid_check);
         if("" eq $pid && $times == 1){
@@ -316,7 +316,7 @@ sub stopProgress{
         return;
     }
     if("" ne $STANDBY_HOST){
-        $pid_check = qq{ssh $STANDBY_HOST -T "ps ax|grep -w $CMD_NAME|grep -vw grep|head -n 1"|}.q(awk '{print $1}');
+        $pid_check = qq{ssh $STANDBY_HOST -T "sudo ps ax|grep -w $CMD_NAME|grep -vw grep|head -n 1"|}.q(awk '{print $1}');
         for my $times(1 .. 3){
             my ($pid,$code) = executeCommand($pid_check);
             if("" ne $pid){
@@ -339,9 +339,9 @@ sub setVirtualIP{
     my ($vip,$vmask,$vdev) = split(/:/,$VIRTUAL_IP);
     if($ROLE_STATE eq $ROLE_MASTER && $VIRTUAL_IP ne ""){
         logMessage("INFO","Try to add virtual ipaddress: ip addr add $vip/$vmask dev $vdev");
-        system(qq{ip addr add $vip/$vmask dev $vdev});
+        system(qq{sudo ip addr add $vip/$vmask dev $vdev});
     }elsif($ROLE_STATE eq $ROLE_STANDBY && $VIRTUAL_IP ne ""){
-        my ($output,$code) = executeCommand(qq(ip a|grep -w $vip|sed s'./. .'|awk '{print \$2":"\$3":"\$6}'));
+        my ($output,$code) = executeCommand(qq(sudo ip a|grep -w $vip|sed s'./. .'|awk '{print \$2":"\$3":"\$6}'));
         $output = trim($output);
         if($output ne ""){
             my ($curr_ip,$curr_mask,$curr_dev) = split(/:/,$output);
@@ -377,7 +377,7 @@ sub initStandby{
     my $boolean = $VERBOSE ? "-v" : "";
     $boolean = $boolean.($FORCE_REBOOT ? "--force-reboot" : "");
     my $resource = " --resource Base64".encode($RESOURCE);
-    my ($output,$code) = executeCommand(qq{scp $CMD_PATH/$CMD_NAME $STANDBY_HOST:/bin/$CMD_NAME 2>&1 && ssh $STANDBY_HOST -T "chmod 755 /bin/$CMD_NAME" 2>&1});
+    my ($output,$code) = executeCommand(qq{scp $CMD_PATH/$CMD_NAME $STANDBY_HOST:/tmp/$CMD_NAME 2>&1 && ssh $STANDBY_HOST -T "sudo mv /tmp/$CMD_NAME /bin/$CMD_NAME && sudo chmod 755 /bin/$CMD_NAME" 2>&1});
     if($code != 0){
         logMessage("WARN","Copy command file to standby host failed:\n".$output);
     }
@@ -476,8 +476,8 @@ sub stopRMaster{
             }
         }else{
             logMessage("INFO","Remote master is still alive, try to stop master");
-            ($output,$code) = executeCommand(qq{timeout $COMMAND_TIMEOUT sudo -u $PGUSER ssh $MASTER_HOST -T "$PRESQL;gpstop -amf"});
-            ($output,$code) = executeCommand(qq{timeout $COMMAND_TIMEOUT sudo -u $PGUSER ssh $MASTER_HOST -T 'E=`ps ax|grep postgres|grep -v grep|grep "M master"|wc -l`;exit \$E' 2>&1});
+            ($output,$code) = executeCommand(qq{sudo timeout $COMMAND_TIMEOUT sudo -u $PGUSER ssh $MASTER_HOST -T "$PRESQL;gpstop -amf"});
+            ($output,$code) = executeCommand(qq{sudo timeout $COMMAND_TIMEOUT sudo -u $PGUSER ssh $MASTER_HOST -T 'E=`ps ax|grep postgres|grep -v grep|grep "M master"|wc -l`;exit \$E' 2>&1});
             if($code == 0){
                 executeResource($MASTER_HOST,"STOP");
                 return $stopSuccess;
