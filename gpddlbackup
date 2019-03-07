@@ -1162,10 +1162,13 @@ sub formatFmtOpts{
     my $size = @array;
     for my $curr(@array){
         $index ++;
-        $item = $item.$curr;
+        my $ascii = ord($curr);
         if($curr eq "'"){
             $inSingleQuote = !$inSingleQuote;
+        }elsif($inSingleQuote && ($ascii <= 31 || $ascii == 127)){
+            $curr = '\x'.sprintf('%.2X',$ascii);
         }
+        $item = $item.$curr;
         if(!$inSingleQuote && ($curr eq ' ' || $index == $size)){
             $item = trim($item);
             if($item =~ /\\/){
