@@ -199,6 +199,11 @@ miaochen\@mail.ustc.edu.cn
 SYNOPSIS
 ************************************************************************************************
 $CMD_NAME [--database database] [--port port] [-f filename] [--target-version gpversion] [-h|--help] [--version]
+
+If you want use psql to execute the backup file, you can use this command to process the backup file:
+
+Ascii0=`echo -n 'print chr(0);'|perl`;sed -e /^--.*\$Ascii0/d -i \$backup_file_name
+
 *****************************************************
 OPTIONS
 *****************************************************
