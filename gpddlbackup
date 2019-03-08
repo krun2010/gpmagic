@@ -23,10 +23,10 @@ my %EXT_FORMAT_TYPE_MAP = ("a" => "AVRO","b" => "CUSTOM","c" => "CSV","p" => "PA
 my %KEY_WORD_SET;
 (my $CMD_NAME = $0) =~ s!.*/(.*)!$1!;
 
-my ($CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = (chr(1).chr(2).chr(7),chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
-my $REGION_START  = qq#--------REGION--------START--------#.$CMD_SPLIT.$CMD_SPLIT;
-my $REGION_END    = qq#--------REGION--------END----------#.$CMD_SPLIT.$CMD_SPLIT;
-my $TASK_SPLIT    = qq#--------TASK----------SPLIT--------#.$CMD_SPLIT.$CMD_SPLIT;
+my ($CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = (chr(1).chr(0).chr(2).chr(7),chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
+my $REGION_START  = qq#--REGION-START-#.$CMD_SPLIT;
+my $REGION_END    = qq#--REGION-END---#.$CMD_SPLIT;
+my $TASK_SPLIT    = qq#--TASK---SPLIT-#.$CMD_SPLIT;
 
 my $SQL_GET_KEY_WORD = q#SELECT upper(word) FROM pg_get_keywords();#;
 my $ENCODE_FUNCTION_ARG_CHECK_SQL = qq{SELECT string_agg(t.typname,',' ORDER BY x.idx),md5(prosrc)  prosrc FROM (

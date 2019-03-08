@@ -19,10 +19,10 @@ my (@TASK_THREAD,$MSGE_THREAD);
 my ($BATCH_MAX,$BATCH_DEFAULT,$BATCH_MIN,$CURR_BATCH_SIZE) = (128,32,8);
 my ($MINI_BATCH) = (32 << 10);
 
-my ($SQL_SPLIT,$CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = ('chr(1)||chr(2)||chr(7)',chr(1).chr(2).chr(7),chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
-my $REGION_START  = qq#--------REGION--------START--------#.$CMD_SPLIT.$CMD_SPLIT;
-my $REGION_END    = qq#--------REGION--------END----------#.$CMD_SPLIT.$CMD_SPLIT;
-my $TASK_SPLIT    = qq#--------TASK----------SPLIT--------#.$CMD_SPLIT.$CMD_SPLIT;
+my ($CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = (chr(1).chr(0).chr(2).chr(7),chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
+my $REGION_START  = qq#--REGION-START-#.$CMD_SPLIT;
+my $REGION_END    = qq#--REGION-END---#.$CMD_SPLIT;
+my $TASK_SPLIT    = qq#--TASK---SPLIT-#.$CMD_SPLIT;
 
 (my $CMD_NAME = $0) =~ s!.*/(.*)!$1!;
 my $MAIN_PID = substr("000000".$$,-6);
