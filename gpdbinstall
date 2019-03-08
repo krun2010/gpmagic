@@ -1044,20 +1044,33 @@ if [[ $IS_RHEL == 0 && $IS_SuSE == 0 ]];then
     exit 3
 fi
 ##################################################################################
-missingcmd=""
+missinginfo=""
 for command in "sed" "zip" "unzip" "tar" "vim" "less" "bash" "tar" "sed" "perl" "ssh" "ifconfig" "mkfs.xfs";do
     which $command                                                                > /dev/null 2>&1
     exitcode=$?
     if [ $exitcode != 0 ];then
-        if [ "$missingcmd" == "" ];then
-            missingcmd=$command
+        if [ "$missinginfo" == "" ];then
+            missinginfo=$command
         else
-            missingcmd=$missingcmd","$command
+            missinginfo=$missinginfo","$command
         fi
     fi
 done
-if [ "$missingcmd" != "" ];then
-    echo "Environment not enough to continue install, commands $missingcmd not found"
+CG_CONFIG=""
+if [ $IS_RHEL == 1 ];then
+    if [ $RHEL_VERSION == 7 ];then
+        CG_CONFIG=`systemctl status cgconfig.service 2> /dev/null`
+    else
+        CG_CONFIG=`service cgconfig status 2> /dev/null`
+    fi
+elif [ $IS_SuSE == 1 ];then
+    CG_CONFIG=`systemctl enable cgconfig.service 2> /dev/null`
+fi
+if [ "$CG_CONFIG" == "" ];then
+    missinginfo=$missinginfo",[cgroup_not_ready]"
+fi
+if [ "$missinginfo" != "" ];then
+    echo "Environment not enough to continue install, missing: $missinginfo"
     exit 2
 fi
 ##################################################################################
@@ -1182,7 +1195,7 @@ for device in ${array[@]};do
         hasconfig=`cat /etc/fstab|grep -w "^$device"|wc -l`
         if [ $hasconfig == 0 ];then
             mkfs.xfs -f $device                                                   > /dev/null 2>&1
-            mkdir /data$nametail                                                  > /dev/null 2>&1
+            mkdir -p /data$nametail                                               > /dev/null 2>&1
             echo "$device /data$nametail xfs nodev,noatime,nobarrier,inode64 0 0" >> /etc/fstab
             Directorys="$Directorys /data$nametail"
         else
@@ -1216,7 +1229,7 @@ if [ $MODE == "M" ];then
     echo "export PGPORT=$MSPT"                                             >> /home/gpadmin/.bashrc
 fi
 ##################################################################################
-mkdir /etc/cgconfig.d                                                             > /dev/null 2>&1
+mkdir -p /etc/cgconfig.d                                                          > /dev/null 2>&1
 touch /etc/cgconfig.d/gpdb.conf                                                   > /dev/null 2>&1
 echo "group gpdb {
      perm {
