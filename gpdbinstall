@@ -14,12 +14,13 @@ my $WORK_PATH = "/tmp";
 if($ENV{PATH} !~ "/sbin"){
     $ENV{PATH}=$ENV{PATH}.":/sbin";
 }
-my @NEED_COMMAND = ("ip","zip","unzip","bash","tar","sed","perl","expect","ssh","ifconfig","mkfs.xfs");
+my @NEED_COMMAND = ("ip","sed","zip","unzip","tar","vim","bash","tar","sed","perl","expect","ssh","ifconfig","mkfs.xfs");
 
 my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$IGNORE_INIT,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
 my (@MASTER_CONFIG,@STANDBY_CONFIG,@ALLHOST_CONFIG_ARRAY,@SEG_INSTALL_CONFIG_ARRAY);
 my ($CLUSTER_EXISTS,$INSTALL_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMIN_NAME,$GP_ADMIN_PASSWD);
 my ($COMMAND_FILE_NAME) = ($WORK_PATH."/install_command.sh");
+my ($ssh) = ("ssh -o NumberOfPasswordPrompts=1");
 
 my $HELP_MESSAGE = qq#COMMAND NAME: $CMD_NAME
 Auto install and initialize greenplum cluster.
@@ -559,7 +560,7 @@ sub checkPasswordAndSudo{
     logMessage("INFO","Check password for all machine".("." x 16));
     for my $config(@ALLHOST_CONFIG_ARRAY){
         my ($ip,$hostname,$role,$ring_number,$ring_order) = @$config;
-        my $command = qq{ssh -o NumberOfPasswordPrompts=1 $ip -T "sudo date"};
+        my $command = qq{$ssh $ip -T "sudo date"};
         executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
     }
 }
@@ -625,7 +626,7 @@ sub modifySystemConfig{
         }
         my $command = qq{scp -q $COMMAND_FILE_NAME $ip:$COMMAND_FILE_NAME};
         executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
-        $command = qq{ssh $ip -T "sudo sh $COMMAND_FILE_NAME '$hostname' '$GP_ADMIN_NAME' '$GP_ADMIN_PASSWD' '$USER_ID' '$mode' '$MASTER_PORT' '$device'"};
+        $command = qq{$ssh $ip -T "sudo sh $COMMAND_FILE_NAME '$hostname' '$GP_ADMIN_NAME' '$GP_ADMIN_PASSWD' '$USER_ID' '$mode' '$MASTER_PORT' '$device'"};
         my $output = executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
         my @array = split(/\n/,trim($output));
         my $path;
@@ -649,6 +650,7 @@ sub modifySystemConfig{
                 errorMessage("Segment data path must be same with all others: $segment_path <=> $path");
             }
         }
+        executeWithExpect(qq{$ssh $GP_ADMIN_NAME\@$ip -T "date"},1,([["yes/no","yes",1],["password",decode($GP_ADMIN_PASSWD)],["*#"]]));
     }
     if(!$IGNORE_INIT && "" eq $master_path){
         errorMessage("Not find Master data path");
@@ -674,14 +676,14 @@ sudo ln -s greenplum-db-$INSTALL_VERSION greenplum-db
 sudo chown -R $GP_ADMIN_NAME. ./greenplum* > /dev/null 2>&1
 echo EXISTS
 fi});
-    my $command = qq{ssh $hostname -T "echo $encode_cmd|base64 -di|bash"};
+    my $command = qq{$ssh $hostname -T "echo $encode_cmd|base64 -di|bash"};
     my $output = executeWithExpect($command,1,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
     if($output =~ /EXISTS/){
         return "SUCCESS";
     }
     $command = qq{scp -q /tmp/greenplum-db.install.tmp.tar $hostname:/tmp/greenplum-db.install.tar};
     executeWithExpect($command,0,([["yes/no","yes",1],["password",$PASSWORD],["*#"]]));
-    $command = qq{ssh $hostname -T "cd /usr/local/;sudo rm -fr greenplum-db-$INSTALL_VERSION;sudo rm -f greenplum-db;sudo tar -xf /tmp/greenplum-db.install.tar;};
+    $command = qq{$ssh $hostname -T "cd /usr/local/;sudo rm -fr greenplum-db-$INSTALL_VERSION;sudo rm -f greenplum-db;sudo tar -xf /tmp/greenplum-db.install.tar;};
     $command = $command.qq{sudo ln -s greenplum-db-$INSTALL_VERSION greenplum-db;sudo chown -R $GP_ADMIN_NAME. greenplum*;sudo rm -f /tmp/greenplum-db.install.tar"};
     executeWithExpect($command,1,([["yes/no","yes"],["password",$PASSWORD],["*#"]]));
 }
@@ -1043,7 +1045,7 @@ if [[ $IS_RHEL == 0 && $IS_SuSE == 0 ]];then
 fi
 ##################################################################################
 missingcmd=""
-for command in "zip" "unzip" "bash" "tar" "sed" "perl" "ssh" "ifconfig" "mkfs.xfs";do
+for command in "sed" "zip" "unzip" "tar" "vim" "bash" "tar" "sed" "perl" "ssh" "ifconfig" "mkfs.xfs";do
     which $command                                                                > /dev/null 2>&1
     exitcode=$?
     if [ $exitcode != 0 ];then
