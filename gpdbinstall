@@ -14,7 +14,7 @@ my $WORK_PATH = "/tmp";
 if($ENV{PATH} !~ "/sbin"){
     $ENV{PATH}=$ENV{PATH}.":/sbin";
 }
-my @NEED_COMMAND = ("ip","sed","zip","unzip","tar","vim","bash","tar","sed","perl","expect","ssh","ifconfig","mkfs.xfs");
+my @NEED_COMMAND = ("ip","sed","zip","unzip","tar","vim","less","bash","tar","sed","perl","expect","ssh","ifconfig","mkfs.xfs");
 
 my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$IGNORE_INIT,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
 my (@MASTER_CONFIG,@STANDBY_CONFIG,@ALLHOST_CONFIG_ARRAY,@SEG_INSTALL_CONFIG_ARRAY);
@@ -788,14 +788,14 @@ sub initGpSystem{
     push @init_config,qq{TRUSTED_SHELL=ssh};
     push @init_config,qq{CHECK_POINT_SEGMENTS=8};
     push @init_config,qq{ENCODING=UNICODE};
-    open(my $init_handle,">","$WORK_PATH/gpinitsystem_config");
+    system(qq{sudo touch $WORK_PATH/gpinitsystem_conf;sudo chmod 777 $WORK_PATH/gpinitsystem_conf});
+    open(my $init_handle,">","$WORK_PATH/gpinitsystem_conf");
     for my $line(@init_config){
         print $init_handle $line."\n";
     }
     close $init_handle;
-    my $output = readpipe(qq{sudo chmod 777 $WORK_PATH/gpinitsystem_config});
     system(qq{sudo su - $GP_ADMIN_NAME -c "rm -f gpAdminLogs/gpinitsystem_*.log"});
-    my $command = qq{sudo su - $GP_ADMIN_NAME -c "gpinitsystem -a --lc-collate=C -c $WORK_PATH/gpinitsystem_config -h $WORK_PATH/all_segs_install"};
+    my $command = qq{sudo su - $GP_ADMIN_NAME -c "gpinitsystem -a --lc-collate=C -c $WORK_PATH/gpinitsystem_conf -h $WORK_PATH/all_segs_install"};
     logMessage("INFO","Execute command:\n".$command);
     system($command);
     my $exit_code = $? >> 8;
@@ -1045,7 +1045,7 @@ if [[ $IS_RHEL == 0 && $IS_SuSE == 0 ]];then
 fi
 ##################################################################################
 missingcmd=""
-for command in "sed" "zip" "unzip" "tar" "vim" "bash" "tar" "sed" "perl" "ssh" "ifconfig" "mkfs.xfs";do
+for command in "sed" "zip" "unzip" "tar" "vim" "less" "bash" "tar" "sed" "perl" "ssh" "ifconfig" "mkfs.xfs";do
     which $command                                                                > /dev/null 2>&1
     exitcode=$?
     if [ $exitcode != 0 ];then
