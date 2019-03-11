@@ -16,9 +16,23 @@ if($ENV{PATH} !~ "/sbin"){
 }
 my @NEED_COMMAND = ("ip","sed","zip","unzip","tar","vim","less","bash","tar","sed","perl","expect","ssh","ifconfig","mkfs.xfs");
 
-my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$IGNORE_INIT,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
+my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$IGNORE_INIT,@GP_CONFIG,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
 my (@MASTER_CONFIG,@STANDBY_CONFIG,@ALLHOST_CONFIG_ARRAY,@SEG_INSTALL_CONFIG_ARRAY);
 my ($CLUSTER_EXISTS,$INSTALL_VERSION,$CAN_USE_EXPECT,$CURRENT_USER_NAME,$GP_ADMIN_NAME,$GP_ADMIN_PASSWD);
+my (%SEGMENT_IP_HASH);
+my %DEFAULT_GPCONFIG = (
+        "max_appendonly_tables"                       => "-v 50000 -m 50000",
+        "gp_max_partition_level"                      => "-v 1 -m 1",
+        "log_min_duration_statement"                  => "-v 30000 -m 30000",
+        "gp_workfile_limit_per_query"                 => "-v 134217728 -m 134217728",
+        "gp_enable_relsize_collection"                => "-v on -m on",
+        "gp_workfile_limit_per_segment"               => "-v 134217728 -m 134217728",
+        "gp_max_local_distributed_cache"              => "-v 1048576",
+        "gp_workfile_compress_algorithm"              => "-v zlib",
+        "gp_autostats_mode_in_functions"              => "-v ON_NO_STATS -m ON_NO_STATS",
+        "writable_external_table_bufsize"             => "-v 16MB -m 16MB",
+        "gp_create_table_random_default_distribution" => "-v on -m on",
+);
 my ($COMMAND_FILE_NAME) = ($WORK_PATH."/install_command.sh");
 my ($ssh) = ("ssh -o NumberOfPasswordPrompts=1");
 
@@ -49,6 +63,7 @@ $CMD_NAME --hosts-config <filename>
     [--port-base <primary instance port base>]
     [--mirror-split <amount of machine which mirror split to>]
     [--ignore-init]
+    [--gpconfig <gpconfig parameter and value> [--gpconfig <gpconfig parameter and value>] ...]
     [--verbose | -v]
     [--parameter-file | --pf <parameter file>]
     [-h | --help]
@@ -178,6 +193,12 @@ OPTIONS
   SSH keys exchange.
   And so on.
 
+[--gpconfig <parameter and value> [--gpconfig <parameter and value>] ...]
+
+  After success init cluster, to run gpcinfig to config greenplum parameters.
+  e.g.:
+  --gpconfig "gp_workfile_compress_algorithm = -v zlib"
+
 [--verbose | -v]
 
   Command will output verbose message.
@@ -201,6 +222,7 @@ OPTIONS
   mas-port        = 5432
   port-base       = 40000
   mirror-split    = 2
+  gpconfig        = gp_workfile_compress_algorithm = -v zlib
   verbose
 
 [-h|--help]
@@ -329,6 +351,7 @@ sub getOption{
         'port-base:i'         => \$PORT_BASE,
         'mirror-split:i'      => \$MIRROR_SPLIT,
         'ignore-init!'        => \$IGNORE_INIT,
+        'gpconfig:s'          => \@GP_CONFIG,
         'verbose|v!'          => \$VERBOSE,
         'parameter-file|pf:s' => \$PARAMETER_FILE,
         'h|help!'             => \$IS_HELP,
@@ -345,23 +368,24 @@ sub getOption{
         for my $line(@parameter_list){
             my ($para,$val) = split(/=/,$line,2);
             ($para,$val) = (trim($para),trim($val));
-            if("hosts-config"    eq $para  && "" eq $HOSTS_CONFIG    ){$HOSTS_CONFIG    = $val;}
-            if("password"        eq $para  && "" eq $PASSWORD        ){$PASSWORD        = $val;}
-            if("gp-admin-name"   eq $para  && "" eq $GP_ADMIN_NAME   ){$GP_ADMIN_NAME   = $val;}
-            if("gp-admin-passwd" eq $para  && "" eq $GP_ADMIN_PASSWD ){$GP_ADMIN_PASSWD = $val;}
-            if("install-file"    eq $para  && "" eq $INSTALL_FILE    ){$INSTALL_FILE    = $val;}
-            if("gp-version"      eq $para  && "" eq $GP_VERSION      ){$GP_VERSION      = $val;}
-            if("mas-dev"         eq $para  && "" eq $MASTER_DEV      ){$MASTER_DEV      = $val;}
-            if("seg-dev"         eq $para                            ){push @SEGMENT_DEV, $val;}
-            if("user-id"         eq $para  && "" eq $USER_ID         ){$USER_ID         = $val;}
-            if("segs-per-disk"   eq $para  && "" eq $SEGS_PER_DISK   ){$SEGS_PER_DISK   = $val;}
-            if("prefix"          eq $para  && "" eq $PREFIX          ){$PREFIX          = $val;}
-            if("mas-port"        eq $para  && "" eq $MASTER_PORT     ){$MASTER_PORT     = $val;}
-            if("port-base"       eq $para  && "" eq $PORT_BASE       ){$PORT_BASE       = $val;}
-            if("mirror-split"    eq $para  && "" eq $MIRROR_SPLIT    ){$MIRROR_SPLIT    = $val;}
-            if("ignore-init"     eq $para  && "" eq $IGNORE_INIT     ){$IGNORE_INIT     = 1   ;}
+            if("hosts-config"    eq $para  && "" eq $HOSTS_CONFIG    ){$HOSTS_CONFIG     = $val;}
+            if("password"        eq $para  && "" eq $PASSWORD        ){$PASSWORD         = $val;}
+            if("gp-admin-name"   eq $para  && "" eq $GP_ADMIN_NAME   ){$GP_ADMIN_NAME    = $val;}
+            if("gp-admin-passwd" eq $para  && "" eq $GP_ADMIN_PASSWD ){$GP_ADMIN_PASSWD  = $val;}
+            if("install-file"    eq $para  && "" eq $INSTALL_FILE    ){$INSTALL_FILE     = $val;}
+            if("gp-version"      eq $para  && "" eq $GP_VERSION      ){$GP_VERSION       = $val;}
+            if("mas-dev"         eq $para  && "" eq $MASTER_DEV      ){$MASTER_DEV       = $val;}
+            if("seg-dev"         eq $para                            ){push @SEGMENT_DEV , $val;}
+            if("user-id"         eq $para  && "" eq $USER_ID         ){$USER_ID          = $val;}
+            if("segs-per-disk"   eq $para  && "" eq $SEGS_PER_DISK   ){$SEGS_PER_DISK    = $val;}
+            if("prefix"          eq $para  && "" eq $PREFIX          ){$PREFIX           = $val;}
+            if("mas-port"        eq $para  && "" eq $MASTER_PORT     ){$MASTER_PORT      = $val;}
+            if("port-base"       eq $para  && "" eq $PORT_BASE       ){$PORT_BASE        = $val;}
+            if("mirror-split"    eq $para  && "" eq $MIRROR_SPLIT    ){$MIRROR_SPLIT     = $val;}
+            if("ignore-init"     eq $para  && "" eq $IGNORE_INIT     ){$IGNORE_INIT      = 1   ;}
+            if("gpconfig"        eq $para                            ){push @GP_CONFIG   , $val;}
             if(("verbose"        eq $para  ||
-                "v"              eq $para) && "" eq $VERBOSE         ){$VERBOSE         = 1   ;}
+                "v"              eq $para) && "" eq $VERBOSE         ){$VERBOSE          = 1   ;}
         }
     }
 }
@@ -474,7 +498,6 @@ sub checkOption{
 sub checkHostsConfig{
     logMessage("INFO","Check host config".("." x 16));
     my @config_list = readLineFromFile($HOSTS_CONFIG);
-    my %seg_ip_hash = ();
     my %seg_host_hash = ();
     for my $config(@config_list){
         my ($ip,$hostname,$role,$ring) = split(/:/,$config);
@@ -499,7 +522,7 @@ sub checkHostsConfig{
             }
             @STANDBY_CONFIG = ($ip,$hostname);
         }else{
-            if(exists $seg_ip_hash{$ip}){
+            if(exists $SEGMENT_IP_HASH{$ip}){
                 errorMessage("Host config incorrect, ip: $ip duplicate");
             }elsif(exists $seg_host_hash{$hostname}){
                 errorMessage("Host config incorrect, hostname: $hostname duplicate");
@@ -509,7 +532,7 @@ sub checkHostsConfig{
             }else{
                 $role = "Backup";
             }
-            $seg_ip_hash{$ip} = $hostname;
+            $SEGMENT_IP_HASH{$ip} = $hostname;
             $seg_host_hash{$hostname} = "";
         }
         push @ALLHOST_CONFIG_ARRAY,[($ip,$hostname,$role,$ring_number,$ring_order)];
@@ -521,9 +544,9 @@ sub checkHostsConfig{
         errorMessage("Not find segment machine config");
     }
     my ($m_ip,$m_hostname) = @MASTER_CONFIG;
-    if(exists $seg_ip_hash{$m_ip}){
+    if(exists $SEGMENT_IP_HASH{$m_ip}){
         logMessage("WARN","Master ip is same with a segment");
-        $m_hostname = $seg_ip_hash{$m_ip};
+        $m_hostname = $SEGMENT_IP_HASH{$m_ip};
         @MASTER_CONFIG = ($m_ip,$m_hostname);
     }
     if(!$IGNORE_INIT){
@@ -536,9 +559,9 @@ sub checkHostsConfig{
     if($s_ip eq $m_ip){
         logMessage("WARN","Standby can not on the same machine with Master");
         @STANDBY_CONFIG = ();
-    }elsif(exists $seg_ip_hash{$s_ip}){
+    }elsif(exists $SEGMENT_IP_HASH{$s_ip}){
         logMessage("WARN","Standby ip is same with a segment");
-        $s_hostname = $seg_ip_hash{$s_ip};
+        $s_hostname = $SEGMENT_IP_HASH{$s_ip};
         @STANDBY_CONFIG = ($s_ip,$s_hostname);
     }
     my @temp_array = ();
@@ -608,8 +631,13 @@ sub modifySystemConfig{
     print $file_handle "cp /etc/hosts /etc/hosts.$time_flag\n";
     print $file_handle "echo '127.0.0.1    localhost\n";
     print $file_handle "#Greenplum hosts start\n";
+    my ($m_ip,$m_hostname) = @MASTER_CONFIG;
+    my ($s_ip,$s_hostname) = @STANDBY_CONFIG;
     for my $config(@ALLHOST_CONFIG_ARRAY){
         my ($ip,$hostname,$role,$ring_number,$ring_order) = @$config;
+        if((($role =~ /^M/ && $ip eq $m_ip) || ($role =~ /^ST/ && $ip eq $s_ip)) && exists $SEGMENT_IP_HASH{$ip}){
+            next;
+        }
         print $file_handle "$ip    $hostname\n";
     }
     print $file_handle "#Others' > /etc/hosts\n";
@@ -718,8 +746,13 @@ sub installBinary{
     logMessage("INFO","Install path is:\n"."/usr/local/greenplum-db-$INSTALL_VERSION");
     my $output = readpipe(qq{cd /usr/local/;sudo tar -cf /tmp/greenplum-db.install.tmp.tar greenplum-db-$INSTALL_VERSION;sudo chown $CURRENT_USER_NAME. /tmp/greenplum-db.install.tmp.tar});
     my @thread_array = ();
+    my ($m_ip,$m_hostname) = @MASTER_CONFIG;
+    my ($s_ip,$s_hostname) = @STANDBY_CONFIG;
     for my $config(@ALLHOST_CONFIG_ARRAY){
         my ($ip,$hostname,$role,$ring_number,$ring_order) = @$config;
+        if((($role =~ /^M/ && $ip eq $m_ip) || ($role =~ /^ST/ && $ip eq $s_ip)) && exists $SEGMENT_IP_HASH{$ip}){
+            next;
+        }
         my ($task_thread) = threads->new(\&installThread,$ip,$hostname);
         push @thread_array,$task_thread;
     }
@@ -989,6 +1022,47 @@ sub addStandby{
         logMessage("WARN","No standby master should config.");
     }
 }
+sub gpConfig{
+    my %gp_config_hash = ();
+    for my $config(@GP_CONFIG){
+        my ($name,$value) = split("=",2);
+        ($name,$value) = (lc(trim($name)),trim($value));
+        if(! exists $gp_config_hash{$name}){
+            $gp_config_hash{$name} = $value;
+        }
+    }
+    if(! exists $gp_config_hash{"gp_vmem_protect_limit"}){
+        my ($mas_value,$seg_value);
+        my $pri_count = @SEGMENT_DEV * $SEGS_PER_DISK;
+        my $master_mem = trim(readpipe(q#free -g|grep Mem|awk '{print $2}'#));
+        my @segment_mem = readpipe(q#gpssh -f #.qq#$WORK_PATH"/all_segs_install"#.q# -e 'free -g'|grep Mem|awk '{print $3}'|sort -n|uniq#);
+        if(@segment_mem > 1){
+            logMessage("WARN","All segment hosts's memery not consistent, will use the smallest to config gp_vmem_protect_limit");
+        }
+        $seg_value = $segment_mem[0];
+        my ($m_ip,$m_hostname) = @MASTER_CONFIG;
+        if(exists $SEGMENT_IP_HASH{$m_ip}){
+            $mas_value = int($seg_value / ($pri_count + 2) * 2);
+            $seg_value = int($mas_value / 2);
+        }else{
+            $mas_value = int($master_mem / 2);
+            $seg_value = int($seg_value * 0.9 * $pri_count);
+        }
+        $mas_value = $mas_value < 8 ? 8192 : $mas_value * 1024;
+        $seg_value = $seg_value < 8 ? 8192 : $seg_value * 1024;
+        if($mas_value > 8192 && $seg_value > 8192){
+            $gp_config_hash{"gp_vmem_protect_limit"} = "-v $seg_value -m $mas_value";
+        }
+    }
+    for my $key(keys %DEFAULT_GPCONFIG){
+        if(! exists $gp_config_hash{$key}){
+            $gp_config_hash{$key} = $DEFAULT_GPCONFIG{$key};
+        }
+    }
+    for my $key(keys %gp_config_hash){
+        system(qq{. /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1;gpconfig -c $key }.$gp_config_hash{$key});
+    }
+}
 sub main{
     getOption();
     checkEnvironment();
@@ -1006,6 +1080,7 @@ sub main{
     addMirror();
     addGPFileSpace();
     addStandby();
+    gpConfig();
 }
 my $command_string = $0." ".join(" ",@ARGV);
 $| = 1;
