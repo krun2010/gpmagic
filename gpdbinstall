@@ -1023,6 +1023,10 @@ sub addStandby{
     }
 }
 sub gpConfig{
+    if($IGNORE_INIT){
+        logMessage("INFO","Ignore config greenplum parameters");
+        return;
+    }
     my %gp_config_hash = ();
     for my $config(@GP_CONFIG){
         my ($name,$value) = split("=",2);
