@@ -627,10 +627,8 @@ sub modifySystemConfig{
     my $config_command = readpipe(qq{cat $CMD_NAME|sed -n '/^____CONFIG_COMMAND_SHELL_START____\$/,/^____CONFIG_COMMAND_SHELL_END____\$/p'|grep -v '____'});
     $config_command =~ s/gpadmin/$GP_ADMIN_NAME/g;
     print $file_handle $config_command;
-    my $time_flag = strftime("%Y%m%d%H%M%S",localtime);
-    print $file_handle "cp /etc/hosts /etc/hosts.$time_flag\n";
-    print $file_handle "echo '127.0.0.1    localhost\n";
-    print $file_handle "#Greenplum hosts start\n";
+    print $file_handle "echo -n '127.0.0.1 = localhost\n";
+    print $file_handle "#Greenplum = hosts start\n";
     my ($m_ip,$m_hostname) = @MASTER_CONFIG;
     my ($s_ip,$s_hostname) = @STANDBY_CONFIG;
     for my $config(@ALLHOST_CONFIG_ARRAY){
@@ -638,9 +636,9 @@ sub modifySystemConfig{
         if((($role =~ /^M/ && $ip eq $m_ip) || ($role =~ /^ST/ && $ip eq $s_ip)) && exists $SEGMENT_IP_HASH{$ip}){
             next;
         }
-        print $file_handle "$ip    $hostname\n";
+        print $file_handle "$ip = $hostname\n";
     }
-    print $file_handle "#Others' > /etc/hosts\n";
+    print $file_handle q#'|awk -F ' = ' '{system("sed -e /^"$1"[[:space:]]/d -i /etc/hosts;echo "$1"\\\\\\x09"$2" >> /etc/hosts")}'#."\n";
     print $file_handle "##################################################################################\n";
     close $file_handle;
     my ($master_path,$segment_path);
@@ -1117,6 +1115,9 @@ if [ -f /etc/redhat-release ];then
     RHEL_VERSION=`cat /etc/redhat-release|grep -o "[0-9]"|head -n 1`
 elif [ -f /etc/SuSE-release ];then
     IS_SuSE=1
+elif [ -f /etc/cgsl-release ];then
+    IS_RHEL=1
+    RHEL_VERSION=7
 fi
 if [[ $IS_RHEL == 0 && $IS_SuSE == 0 ]];then
     echo "Unsupported operating systems."
