@@ -140,11 +140,11 @@ sub exequteQuery{
     if(!open(FILE_HANDLE,">",$script_file)){
         errorMessage("Can't open temp file: $script_file");
     }
-    print FILE_HANDLE "set client_encoding to utf8;\n".$query_sql;
+    print FILE_HANDLE $query_sql;
     close FILE_HANDLE;
-    my $CMDS = "set -o pipefail;PGDATABASE=$DATABASE_NAME PGPORT=$PORT ";
+    my $CMDS = "set -o pipefail;PGDATABASE=$DATABASE_NAME PGPORT=$PORT PGOPTIONS='-c client_encoding=UTF8' ";
     local $/ = $RECORD_SPLIT;
-    $CMDS = $CMDS."psql -R '$/' -tAXF '$SQL_DELIM' 2>&1 -f $script_file |sed -e '/^SET\$/d' -e 's/psql.*gpdbrestore.script.[0-9]*:[0-9]*: //'";
+    $CMDS = $CMDS."psql -R '$/' -tAXF '$SQL_DELIM' 2>&1 -f $script_file |sed -e 's/psql.*gpdbrestore.script.[0-9]*:[0-9]*: //'";
     my @result = readpipe($CMDS);
     my $return_code = $? >> 8;
     chomp(@result);

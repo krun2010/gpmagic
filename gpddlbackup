@@ -309,11 +309,9 @@ sub isTempSchema{
 }
 sub queryResult{
     my ($query_sql,$return_flag) = @_;
-    my $CMDS = "set -o pipefail;PGDATABASE=$DATABASE_NAME PGPORT=$PORT ";
+    my $CMDS = "PGDATABASE=$DATABASE_NAME PGPORT=$PORT PGOPTIONS='-c optimizer=off -c client_encoding=UTF8' ";
     local $/ = $RECORD_SPLIT;
-    $CMDS = $CMDS."psql -R '$/' -tAXF '$SQL_DELIM' -v ON_ERROR_STOP=1 2>&1 <<'END_OF_SQL'|sed '/^SET\$/d'\n";
-    $CMDS = $CMDS."set client_encoding to utf8;\n";
-    $CMDS = $CMDS."set optimizer to off;\n";
+    $CMDS = $CMDS."psql -R '$/' -tAXF '$SQL_DELIM' -v ON_ERROR_STOP=1 2>&1 <<'END_OF_SQL'\n";
     $CMDS = $CMDS.$query_sql."\n";
     $CMDS = $CMDS."END_OF_SQL\n";
     my @result = readpipe($CMDS);
