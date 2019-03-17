@@ -201,7 +201,7 @@ my $BACKUP_FUNCTION_ARG_CHECK_SQL = qq{select string_agg(t.typname,',' order by 
     )a,pg_type t where t.oid=a.typs[a.idx];};
 my $BACKUP_FUNCTION_ARG_CHECK_VALUE = "varchar,int4,int4,varchar,varchar,int8,varchar,varchar,varchar";
 my $BACKUP_FUNCTION_SRC_CHECK_SQL = qq{select md5(prosrc) from pg_proc where proname='gp_backup_function' and pronamespace=(select oid from pg_namespace where nspname='gp_toolkit');};
-my $BACKUP_FUNCTION_SRC_CHECK_MD5 = "74a253047f66b2ad415d0904b39d6cb5";
+my $BACKUP_FUNCTION_SRC_CHECK_MD5 = "eea52f646344f87c7f4031012d7f0642";
 my $BACKUP_FUNCTION_DDL = q#CREATE OR REPLACE FUNCTION gp_toolkit.gp_backup_function(dbname varchar,port int,content int,path varchar,
     tbname varchar,dtflag bigint,whr varchar,encoding varchar,fast varchar)returns bigint as $$
 import os,commands,time
@@ -226,12 +226,11 @@ try:
     if "1"==fast:
         level="-1 "
     cmd="""`set -o pipefail
-PGOPTIONS='-c gp_session_role=utility' psql -qtAX -v ON_ERROR_STOP=1 -d %s -p %s <<EOF|gzip %s> %s/%s.tmp
-SET CLIENT_ENCODING TO %s;
+PGOPTIONS='-c gp_session_role=utility -c client_encoding=%s' psql -qtAX -v ON_ERROR_STOP=1 -d %s -p %s <<EOF|gzip %s> %s/%s.tmp
 copy (select * from "%s"."%s"%s) to STDOUT
 EOF
 mv %s/%s.tmp %s/%s.gz
-`""" % (dbname,port,level,dirc,fname,encoding,scma,rel,whr,dirc,fname,dirc,fname)
+`""" % (encoding,dbname,port,level,dirc,fname,scma,rel,whr,dirc,fname,dirc,fname)
     printLog("BEGIN","")
     (cod,val)=commands.getstatusoutput(cmd)
     if len(val)>0:
@@ -555,11 +554,9 @@ sub readLineFromFile{
 }
 sub queryResult{
     my ($query_sql,$return_flag) = @_;
-    my $CMDS = "set -o pipefail;PGDATABASE=$DATABASE_NAME PGPORT=$PORT ";
+    my $CMDS = "PGDATABASE=$DATABASE_NAME PGPORT=$PORT PGOPTIONS='-c optimizer=off -c client_encoding=UTF8' ";
     local $/ = $RECORD_SPLIT;
-    $CMDS = $CMDS."psql -R '$/' -tAXF '$SQL_DELIM' -v ON_ERROR_STOP=1 2>&1 <<'END_OF_SQL'|sed '/^SET\$/d'\n";
-    $CMDS = $CMDS."set client_encoding to utf8;\n";
-    $CMDS = $CMDS."set optimizer to off;\n";
+    $CMDS = $CMDS."psql -R '$/' -tAXF '$SQL_DELIM' -v ON_ERROR_STOP=1 2>&1 <<'END_OF_SQL'\n";
     $CMDS = $CMDS.$query_sql."\n";
     $CMDS = $CMDS."END_OF_SQL\n";
     my @result = readpipe($CMDS);

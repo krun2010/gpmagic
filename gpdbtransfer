@@ -240,8 +240,7 @@ if [ "M" == "$TYPE" ];then
     RPORT=${RARRAY[2]}
     if [ $COMP == 0 ];then
 ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$LPORT"|awk '{if($1!='$$'){system("kill -9 "$1)}}' >/dev/null 2>&1
-PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$LPORT" -h $RIP -p $RPORT -d $DBNM <<END_OF_PSQL
-SET CLIENT_ENCODING TO $ENCD;
+PGOPTIONS="-c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$LPORT" -h $RIP -p $RPORT -d $DBNM <<END_OF_PSQL
 $LOCK;
 COPY (SELECT * FROM "$SCMA"."$REL"$WHERE) TO STDOUT;
 END_OF_PSQL
@@ -252,8 +251,7 @@ ssh $USER@$RIP -T <<END_OF_OUTER_SHELL |gunzip
 ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$RPORT"|awk '{if(\\$1!='\\$\\$'){system("kill -9 "\\$1)}}' >/dev/null 2>&1
 . $GPHOME/greenplum_path.sh
 set -o pipefail
-PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$RPORT" -p $RPORT -d $DBNM <<END_OF_INNER_SHELL |gzip -c -f -1
-SET CLIENT_ENCODING TO $ENCD;
+PGOPTIONS="-c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$RPORT" -p $RPORT -d $DBNM <<END_OF_INNER_SHELL |gzip -c -f -1
 $LOCK;
 COPY (SELECT * FROM "$SCMA"."$REL"$WHERE) TO STDOUT;
 END_OF_INNER_SHELL
@@ -275,8 +273,7 @@ else
         else
             if [ $COMP == 0 ];then
 ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$LPORT"|awk '{if($1!='$$'){system("kill -9 "$1)}}' >/dev/null 2>&1
-PGOPTIONS='-c gp_session_role=utility' PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$LPORT" -h $RIP -p $RPORT -d $DBNM <<END_OF_PSQL
-SET CLIENT_ENCODING TO $ENCD;
+PGOPTIONS="-c gp_session_role=utility -c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$LPORT" -h $RIP -p $RPORT -d $DBNM <<END_OF_PSQL
 $LOCK;
 COPY (SELECT * FROM "$SCMA"."$REL"$WHERE) TO STDOUT;
 END_OF_PSQL
@@ -287,8 +284,7 @@ ssh $USER@$RIP -T <<END_OF_OUTER_SHELL |gunzip
 ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$RPORT"|awk '{if(\\$1!='\\$\\$'){system("kill -9 "\\$1)}}' >/dev/null 2>&1
 . $GPHOME/greenplum_path.sh
 set -o pipefail
-PGOPTIONS='-c gp_session_role=utility' PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$RPORT" -p $RPORT -d $DBNM <<END_OF_INNER_SHELL |gzip -c -f -1
-SET CLIENT_ENCODING TO $ENCD;
+PGOPTIONS="-c gp_session_role=utility -c client_encoding=$ENCD" PGAPPNAME="GPDBTRANSFER.$KEY.$INDX" PGUSER=$USER PGPASSWORD=$PASS psql -qtAX -v ON_ERROR_STOP=1 -v "ID=GPDBTRANSFER.$KEY.$INDX.$RPORT" -p $RPORT -d $DBNM <<END_OF_INNER_SHELL |gzip -c -f -1
 $LOCK;
 COPY (SELECT * FROM "$SCMA"."$REL"$WHERE) TO STDOUT;
 END_OF_INNER_SHELL
@@ -751,7 +747,7 @@ sub readLineFromFile{
 }
 sub queryResult{
     my ($src_or_dest,$query_sql,$return_flag) = @_;
-    my $CMDS = "set -o pipefail;PGAPPNAME=gpdbtransfer ";
+    my $CMDS = "PGAPPNAME=gpdbtransfer PGOPTIONS='-c client_encoding=UTF8' ";
     if("SRC" eq $src_or_dest){
         $CMDS = $CMDS."PGHOST='$SRC_HOST' PGDATABASE='$SRC_DATABASE' PGPORT=$SRC_PORT ";
         $CMDS = $CMDS.("" ne $SRC_USER ? "PGUSER='$SRC_USER' " : "").("" ne $SRC_PASSWD ? "PGPASSWORD='$SRC_PASSWD' " : "");
@@ -760,8 +756,7 @@ sub queryResult{
         $CMDS = $CMDS.("" ne $DEST_USER ? "PGUSER='$DEST_USER' " : "").("" ne $DEST_PASSWD ? "PGPASSWORD='$DEST_PASSWD' " : "");
     }
     local $/ = $RECORD_SPLIT;
-    $CMDS = $CMDS."psql -R '$/' -tAXF '$SQL_DELIM' -v ON_ERROR_STOP=1 2>&1 <<'END_OF_SQL'|sed '/^SET\$/d'\n";
-    $CMDS = $CMDS."set client_encoding to utf8;\n";
+    $CMDS = $CMDS."psql -R '$/' -tAXF '$SQL_DELIM' -v ON_ERROR_STOP=1 2>&1 <<'END_OF_SQL'\n";
     $CMDS = $CMDS.$query_sql."\n";
     $CMDS = $CMDS."END_OF_SQL\n";
     my @result = readpipe($CMDS);
