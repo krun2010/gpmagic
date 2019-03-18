@@ -837,9 +837,7 @@ sub initGpSystem{
 sub queryResult{
     my ($query_sql) = @_;
     my $CMDS = ". /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1;PGDATABASE=postgres PGPORT=$MASTER_PORT ";
-    $CMDS = $CMDS."psql -h 127.0.0.1 -U $GP_ADMIN_NAME -qtAXF '#!^' -v ON_ERROR_STOP=1 2>&1 <<'END_OF_SQL'\n";
-    $CMDS = $CMDS."set client_encoding to utf8;\n";
-    $CMDS = $CMDS."set optimizer to off;\n";
+    $CMDS = $CMDS."PGOPTIONS='-c optimizer=off -c client_encoding=UTF8' psql -h 127.0.0.1 -U $GP_ADMIN_NAME -qtAXF '#!^' -v ON_ERROR_STOP=1 2>&1 <<'END_OF_SQL'\n";
     $CMDS = $CMDS.$query_sql."\n";
     $CMDS = $CMDS."END_OF_SQL\n";
     my $query_result = readpipe($CMDS);
