@@ -14,7 +14,7 @@ my $WORK_PATH = "/tmp";
 if($ENV{PATH} !~ "/sbin"){
     $ENV{PATH}=$ENV{PATH}.":/sbin";
 }
-my @NEED_COMMAND = ("ip","sed","zip","unzip","vim","less","bash","tar","perl","expect","ssh","ifconfig","mkfs.xfs");
+my @NEED_COMMAND = ("ip","sed","zip","unzip","less","bash","tar","perl","expect","ssh","ifconfig","mkfs.xfs");
 
 my ($HOSTS_CONFIG,$PASSWORD,$INSTALL_FILE,$GP_VERSION,$MASTER_DEV,@SEGMENT_DEV,$USER_ID,$SEGS_PER_DISK,$PREFIX,$MASTER_PORT,$PORT_BASE,$MIRROR_SPLIT,$IGNORE_INIT,@GP_CONFIG,$VERBOSE,$PARAMETER_FILE,$IS_HELP);
 my (@MASTER_CONFIG,@STANDBY_CONFIG,@ALLHOST_CONFIG_ARRAY,@SEG_INSTALL_CONFIG_ARRAY);
@@ -1123,7 +1123,7 @@ if [[ $IS_RHEL == 0 && $IS_SuSE == 0 ]];then
 fi
 ##################################################################################
 missinginfo=""
-for command in "sed" "zip" "unzip" "vim" "less" "bash" "tar" "perl" "ssh" "ifconfig" "mkfs.xfs";do
+for command in "sed" "zip" "unzip" "less" "bash" "tar" "perl" "ssh" "ifconfig" "mkfs.xfs";do
     which $command                                                                > /dev/null 2>&1
     exitcode=$?
     if [ $exitcode != 0 ];then
