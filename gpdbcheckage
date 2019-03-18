@@ -1,0 +1,561 @@
+#!/usr/bin/perl
+use strict;
+use MIME::Base64;
+use threads;
+use Thread::Queue;
+use Getopt::Long qw(:config bundling no_ignore_case no_autoabbrev);
+use POSIX;
+
+my ($PORT,$AGE_THRESHOLD,$BATCH_SIZE,$NOT_PROMPT,$IS_HELP,$LOG_PATH);
+my ($CURR_BATCH_SIZE,$CURR_GLOBAL_INDEX);
+my ($TASK_QUEUE,$MSGE_QUEUE);
+my ($SQL_SPLIT,$CMD_SPLIT,$SQL_DELIM,$RECORD_SPLIT) = ('chr(1)||chr(2)||chr(7)',chr(1).chr(2).chr(7),chr(3).chr(4).chr(8),chr(5).chr(6).chr(9).chr(10));
+my $TASK_SIZE = 0;
+my ($BATCH_MAX,$BATCH_DEFAULT,$BATCH_MIN) = (12,6,1);
+my @INSTANCE_INFO;
+my @DATABASE_AGE_INFO;
+my $MAX_DATABASE_NAME_LENGTH;
+my ($AGE_THRESHOLD_DEFAULT) = (100000000);
+my ($LOG_PATH_DEFAULT) = ($ENV{"HOME"}."/gpAdminLogs");
+my ($LOG_FILE_HANDLE);
+my (@MESSAGE_CACHE);
+my ($WRITE_TO_FILE) = 0;
+my %KEY_WORD_SET;
+(my $CMD_NAME = $0) =~ s!.*/(.*)!$1!;
+my $MAIN_PID = substr("000000".$$,-6);
+
+my $SQL_GET_KEY_WORD = q#SELECT upper(word) FROM pg_get_keywords();#;
+my $ENCODE_FUNCTION_ARG_CHECK_SQL = qq{SELECT string_agg(t.typname,',' ORDER BY x.idx),md5(prosrc)  prosrc FROM (
+    SELECT oid,proname,proargtypes typs,generate_series(0,array_upper(proargtypes,1)) idx,prosrc FROM pg_proc
+        WHERE proname = 'mcencode' AND pronamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'gp_toolkit')
+    ) x, pg_type t WHERE t.oid = x.typs[x.idx] GROUP BY x.oid,x.proname,x.prosrc ORDER BY 1;};
+my @ENCODE_FUNCTION_ARG_CHECK_VALUE = ("_aclitem","name","text","_text");
+my @ENCODE_FUNCTION_SRC_CHECK_MD5 = ("1e5a15807e4243c2bdad3c6aff6389f1","75245db7e5549d576526e1b10dfe87ad","75245db7e5549d576526e1b10dfe87ad","cac17fe8e01235f96a4805ccc268443d");
+my $ENCODE_FUNCTION_DDL = q#CREATE OR REPLACE FUNCTION gp_toolkit.mcencode(str text) returns varchar as $$
+import base64
+if str == None:
+    return ""
+return base64.b64encode(str).replace("\n","")
+$$ language plpythonu;
+
+CREATE OR REPLACE FUNCTION gp_toolkit.mcencode(strs text[]) returns varchar as $$
+import base64
+if strs == None:
+    return ""
+output = []
+for str in strs:
+    output.append(base64.b64encode(str))
+return ",".join(output).replace("\n","")
+$$ language plpythonu;
+
+CREATE OR REPLACE FUNCTION gp_toolkit.mcencode(str name) returns varchar as $$
+import base64
+if str == None:
+    return ""
+return base64.b64encode(str).replace("\n","")
+$$ language plpythonu;
+
+CREATE OR REPLACE FUNCTION gp_toolkit.mcencode(acls aclitem[]) returns varchar as $$
+import base64
+if acls == None:
+    return ""
+output = []
+for acl in acls:
+    (key,val,findKey,inBracket) = ("","",False,False)
+    for chr in acl:
+        if not findKey:
+            key = key + chr
+        else:
+            val = val + chr
+        if chr == '"':
+            inBracket = not inBracket
+        elif chr == '=' and not inBracket:
+            key = key[0:-1]
+            findKey = True
+    if inBracket:
+        plpy.error("Can not split: %s" % (acl))
+    output.append(base64.b64encode(key)+":"+base64.b64encode(val))
+return ",".join(output).replace("\n","")
+$$ language plpythonu;
+#;
+my $DATABASE_AGE_CHECK_SQL = qq#select datname,age,datallowconn from(
+    select datname,age,datallowconn,row_number() over(partition by datname order by age desc) from (
+        select datname,age(datfrozenxid),datallowconn from pg_database
+        union all
+        select datname,age(datfrozenxid),datallowconn from gp_dist_random('pg_database')
+    )t
+)p where row_number=1 ORDER BY age DESC;#;
+my $DATABASE_NAME_SIZE_SQL = qq#select max(length(datname)) from pg_database;#;
+my $HELP_MESSAGE = qq#COMMAND NAME: gpdbcheckage
+Check datbase's age in Greenplum cluster, execute VACUUM FREEZE in cluster if necessary.
+************************************************************************************************
+SYNOPSIS
+************************************************************************************************
+gpdbcheckprt [--port port] [--age age threshold] [-a] [-h|--help]
+*****************************************************
+DESCRIPTION
+*****************************************************
+The gpdbcheckage utility is used to check datbase's age in Greenplum cluster, if the age greater than the threshold,
+    execute VACUUM FREEZE on all database in the Greenplum cluster.
+When you start gpdbcheckage, the utility will try to check all the database's age.
+
+Note:
+You can use -a to ignore the double check when the cluster need execute VACUUM FREEZE.
+*****************************************************
+OPTIONS
+*****************************************************
+
+--port <port>
+
+  Cluster server port, if not specified, try to get environment PGPORT,
+  If the PGPORT is also not be set, use the default value 5432.
+
+--age <age>
+
+  Age threshold value, when the cluster's age greater than this threshold,
+  will execute VACUUM FREEZE on all database in the Greenplum cluster.
+  If not specified, use the default value $AGE_THRESHOLD_DEFAULT.
+
+-a (do not prompt)
+
+  Do not prompt the user for confirmation.
+
+-h|--help
+  Displays the online help.
+
+*****************************************************
+EXAMPLES
+*****************************************************
+gpdbcheckage --port 6432 --age 500000000 -a
+#;
+
+sub printMessage{
+    my ($flag,$message) = @_;
+    my $time_flag = strftime("%Y%m%d:%H:%M:%S.",localtime).$MAIN_PID;
+    $message = "$time_flag-[$flag]-:$message\n";
+    print $message;
+    return $message;
+}
+sub logMessage{
+    my ($flag,$message) = @_;
+    my $log_message = printMessage($flag,$message);
+    if($WRITE_TO_FILE == 1){
+        for my $msg(@MESSAGE_CACHE){
+            print $LOG_FILE_HANDLE $msg;
+        }
+        @MESSAGE_CACHE = ();
+        $WRITE_TO_FILE = 2;
+        print $LOG_FILE_HANDLE $log_message;
+    }elsif($WRITE_TO_FILE == 2){
+        print $LOG_FILE_HANDLE $log_message;
+    }else{
+        push @MESSAGE_CACHE,$log_message;
+    }
+}
+sub errorMessage{
+    my ($message) = @_;
+    logMessage("ERROR",$message);
+    print "Usage: gpdbbackup [-h|--help] [options]\n";
+    exit 1;
+}
+sub trim{
+    my ($string) = @_;
+    $string =~ s/(^\s+|\s+$)//g;
+    return $string;
+}
+sub encode{
+    my ($string) = @_;
+    my $encode = encode_base64($string);
+    $encode =~ s/\n//g;
+    return $encode;
+}
+sub decode{
+    if(wantarray()){
+        my @rv = ();
+        for my $str(@_){
+            push @rv,decode_base64($str);
+        }
+        return @rv;
+    }else{
+        return decode_base64($_[0]);
+    }
+}
+sub quote{
+    my ($ident) = @_;
+    $ident =~ s/"/""/g;
+    if($ident !~ /^[a-z][a-z0-9_]*$/ || exists $KEY_WORD_SET{uc($ident)}){
+        $ident = '"'.$ident.'"';
+    }
+    return $ident;
+}
+sub getInput{
+    my ($hint,@values) = @_;
+    my $input;
+    while(1){
+        print($hint."\n");
+        $input = <STDIN>;
+        $input = trim($input);
+        for my $chk(@values){
+            if($input eq $chk){
+                return $input;
+            }
+        }
+    }
+}
+sub queryResult{
+    my ($connect_url,$query_sql,$return_flag) = @_;
+    my ($utility,$hostname,$database,$port) = split(/:/,$connect_url);
+    my $CMDS = "T" eq $utility ? "PGOPTIONS='-c gp_session_role=utility -c optimizer=off -c client_encoding=UTF8' " : "PGOPTIONS='-c optimizer=off -c client_encoding=UTF8' ";
+    local $/ = $RECORD_SPLIT;
+    $CMDS = $CMDS."PGHOST=$hostname PGDATABASE=$database PGPORT=$port ";
+    $CMDS = $CMDS."psql -R '$/' -tAXF '$SQL_DELIM' -v ON_ERROR_STOP=1 2>&1 <<'END_OF_SQL'\n";
+    $CMDS = $CMDS.$query_sql."\n";
+    $CMDS = $CMDS."END_OF_SQL\n";
+    my @result = readpipe($CMDS);
+    my $return_code = $? >> 8;
+    chomp(@result);
+    local $/ = chr(10);
+    chomp($result[-1]) if (@result > 0);
+    return ($return_code,join("\n",@result)) if ("CV" eq $return_flag);
+    errorMessage(join("\n",@result)) if ($return_code);
+    return join("\n",@result) if ("Scalar" eq $return_flag);
+    my @return_list = ();
+    for my $row(@result){
+        push @return_list,[split(/$SQL_DELIM/,$row)];
+    }
+    return @return_list;
+}
+sub getOption{
+    GetOptions(
+        'port:i'  => \$PORT,
+        'age:i'   => \$AGE_THRESHOLD,
+        'B:i'     => \$BATCH_SIZE,
+        'a!'      => \$NOT_PROMPT,
+        'h|help!' => \$IS_HELP,
+    );
+    if(@ARGV != 0){
+        errorMessage("Some parameters unknown: [@ARGV]\nPlease refer to $CMD_NAME --help");
+    }
+    if($IS_HELP){
+        print $HELP_MESSAGE;
+        exit 0;
+    }
+}
+sub checkOption{
+    if("" eq $PORT){
+        logMessage("INFO","Not specify, try to get from environment: --port");
+        $PORT = $ENV{'PGPORT'};
+        if("" eq $PORT){
+            logMessage("INFO","Not specify in environment, use default(5432): --port");
+            $PORT=5432;
+        }
+    }
+    if("" eq $AGE_THRESHOLD){
+        $AGE_THRESHOLD = $AGE_THRESHOLD_DEFAULT;
+        logMessage("INFO","Not specify, use default($AGE_THRESHOLD): --age");
+    }
+    if("" eq $BATCH_SIZE || $BATCH_SIZE > $BATCH_MAX || $BATCH_SIZE < $BATCH_MIN){
+        logMessage("NOTICE","Not specify or out of limit, use default($BATCH_DEFAULT): -B");
+        $BATCH_SIZE = $BATCH_DEFAULT;
+    }
+    $LOG_PATH = $LOG_PATH_DEFAULT;
+    logMessage("INFO","Log path:$LOG_PATH");
+    `mkdir -p $LOG_PATH`;
+    my $log_file = $LOG_PATH."/gpdbcheckage_".trim(`date +%Y%m%d`).".log";
+    if(!open($LOG_FILE_HANDLE,">>",$log_file)){
+        errorMessage("Can't open file:$log_file");
+    }else{
+        my $stdout = select $LOG_FILE_HANDLE;
+        $| = 1;
+        select $stdout;
+    }
+    $WRITE_TO_FILE = 1;
+    logMessage("INFO","Log file:$log_file");
+}
+sub getKeyWord{
+    my @result = queryResult("F:localhost:template1:$PORT",$SQL_GET_KEY_WORD);
+    for my $row(@result){
+        my ($word) = @$row;
+        $KEY_WORD_SET{$word} = "";
+    }
+}
+sub checkLanguage{
+    my ($connect_url) = @_;
+    my $result = queryResult($connect_url,"select 1 from pg_language where lanname='plpythonu';","Scalar");
+    if("" eq $result){
+        queryResult($connect_url,"create language plpythonu;");
+    }
+}
+sub checkEncodeFunction{
+    my ($connect_url) = @_;
+    my @result = queryResult($connect_url,$ENCODE_FUNCTION_ARG_CHECK_SQL);
+    my $has_problem = 0;
+    my $result_size = @result;
+    my $check_size = @ENCODE_FUNCTION_ARG_CHECK_VALUE;
+    if($result_size != $check_size){
+        $has_problem = 1;
+    }else{
+        for my $index(0 .. $result_size - 1){
+            my ($arg,$md5) = @{$result[$index]};
+            if($arg ne $ENCODE_FUNCTION_ARG_CHECK_VALUE[$index] || $md5 ne $ENCODE_FUNCTION_SRC_CHECK_MD5[$index]){
+                $has_problem = 1;
+                last;
+            }
+        }
+    }
+    if($has_problem){
+        for my $row(@result){
+            my ($arg,$md5) = @$row;
+            queryResult($connect_url,"drop function if exists gp_toolkit.mcencode($arg);");
+        }
+        queryResult($connect_url,$ENCODE_FUNCTION_DDL);
+    }
+}
+sub executeFreeze{
+    my $task = $TASK_QUEUE->dequeue();
+    while(defined $task){
+        my @shared_msg :shared;
+        my ($connect_url,$query_sql,$object) = @$task;
+        my ($code,$value) = queryResult($connect_url,$query_sql,"CV");
+        if($code > 0){
+            @shared_msg = ("ERR ","$object [$code],[$value]");
+        }else{
+            @shared_msg = ("OK  ","$object");
+        }
+        $MSGE_QUEUE->enqueue(\@shared_msg);
+        $task = $TASK_QUEUE->dequeue();
+    }
+    $MSGE_QUEUE->enqueue(undef);
+}
+sub executeMessage{
+    my ($end_index,$error_index,$all_index,$success_index) = (0,0,0,0);
+    my $msg = $MSGE_QUEUE->dequeue();
+    while(1){
+        if(defined $msg){
+            my ($type,$msg) = @$msg;
+            $error_index += "OK  " ne $type ? 1 : 0;
+            $success_index += "OK  " eq $type ? 1 : 0;
+            $all_index += 1;
+            logMessage($type,"TIMES $CURR_GLOBAL_INDEX BATCH $CURR_BATCH_SIZE ($success_index/$error_index/$TASK_SIZE)".$msg);
+        }else{
+            $end_index += 1;
+            if($end_index eq $CURR_BATCH_SIZE){
+                last;
+            }
+        }
+        $msg = $MSGE_QUEUE->dequeue();
+    }
+}
+sub startProcessThread{
+    my @thread_array = ();
+    for my $index(0 .. $CURR_BATCH_SIZE-1){
+        $TASK_QUEUE->enqueue(undef);
+        my $task_thread = threads->new(\&executeFreeze);
+        push @thread_array,$task_thread;
+    }
+    my $message_thread = threads->new(\&executeMessage);
+    for my $thread(@thread_array){
+        $thread->join;
+    }
+    $message_thread->join;
+}
+sub clearTempSchema{
+    my ($database_name) = @_;
+    logMessage("INFO","Clear temp schema in database: $database_name");
+    my $schema_sql = q{select hostname,port,nspname from (
+    select gp_segment_id,nspname,case when nspname like E'pg\_temp\_%' then substr(nspname,9) else substr(nspname,15) end sessionid
+    from pg_namespace where nspname like E'pg\_temp\_%' or nspname like E'pg\_toast\_temp\_%'
+        union all
+    select gp_segment_id,nspname,case when nspname like E'pg\_temp\_%' then substr(nspname,9) else substr(nspname,15) end sessionid
+    from gp_dist_random('pg_namespace') where nspname like E'pg\_temp\_%' or nspname like E'pg\_toast\_temp\_%'
+) n, gp_segment_configuration c
+where n.gp_segment_id = c.content::int and c.role = 'p'
+and sessionid::int not in(select sess_id from pg_stat_activity) order by random();};
+    my @schema_array = queryResult("F:localhost:$database_name:$PORT",$schema_sql);
+    for my $row(@schema_array){
+        my ($hostname,$port,$schema) = @$row;
+        my $drop_sql = qq{DROP SCHEMA IF EXISTS $schema CASCADE;};
+        logMessage("INFO",$drop_sql);
+        my @shared_task :shared = ("T:$hostname:$database_name:$port",$drop_sql,"SCHEMA:$database_name.$schema");
+        $TASK_QUEUE->enqueue(\@shared_task);
+    }
+    $TASK_SIZE = @INSTANCE_INFO;
+    startProcessThread($TASK_SIZE);
+}
+sub checkSystemAge{
+    ##Get database age information for next process [VACUMM FREEZE]
+    @DATABASE_AGE_INFO = queryResult("F:localhost:template1:$PORT",$DATABASE_AGE_CHECK_SQL);
+    my $max_name_length = $MAX_DATABASE_NAME_LENGTH + 1;
+    my $max_age_length = length($DATABASE_AGE_INFO[0][1]) + 1;
+    my $name_tail = " " x $max_name_length;
+    my $age_tail = " " x $max_age_length;
+    my $max_age_in_system = 0;
+    my $format_header = (" " x 10).substr("DataBase Name".$name_tail,0,$max_name_length).(" " x 8)."AGE";
+    logMessage("INFO",$format_header);
+    my @temp_info = ();
+    for my $row(@DATABASE_AGE_INFO){
+        my ($database_name,$age,$can_connect) = @$row;
+        my $format_name = substr(($database_name.$name_tail),0,$max_name_length);
+        my $format_age = substr(($age.$age_tail),0,$max_age_length);
+        if($can_connect eq "t"){
+            clearTempSchema($database_name);
+        }
+        if($age >= $AGE_THRESHOLD){
+            push @temp_info,$row;
+            logMessage("INFO","DATABASE: $format_name AGE: $format_age");
+        }else{
+            logMessage("INFO","DATABASE: $format_name AGE: $format_age less than $AGE_THRESHOLD, ignore it");
+        }
+        $max_age_in_system = $age > $max_age_in_system ? $age : $max_age_in_system;
+    }
+    @DATABASE_AGE_INFO = @temp_info;
+    return $max_age_in_system;
+}
+sub freezeTemplate0{
+    for my $inst(@INSTANCE_INFO){
+        my ($hostname,$port) = @$inst;
+        my $vacuum_sql = qq{set allow_system_table_mods to dml;update pg_database set datallowconn=true where datname='template0';\n};
+        $vacuum_sql = $vacuum_sql.qq{\\c template0\nVACUUM FREEZE;\n};
+        $vacuum_sql = $vacuum_sql.qq{\\c template1\nset allow_system_table_mods to dml;\n};
+        $vacuum_sql = $vacuum_sql.qq{update pg_database set datallowconn=false where datname='template0';VACUUM FULL pg_database;};
+        my @shared_task :shared = ("T:$hostname:template1:$port",$vacuum_sql,"DATABASE:$hostname:template1:$port");
+        $TASK_QUEUE->enqueue(\@shared_task);
+    }
+    $TASK_SIZE = @INSTANCE_INFO;
+    startProcessThread($TASK_SIZE);
+}
+sub freezeCatalog{
+    my ($database_name) = @_;
+    my $table_sql = qq{SELECT relname FROM (
+    SELECT relname, max(age) age FROM (
+        SELECT n.nspname||'.'||c.relname relname, age(relfrozenxid) age, n.nspname nsp, relnamespace nspid FROM pg_class c, pg_namespace n
+        WHERE c.relnamespace=n.oid AND c.relkind = 'r' AND c.relstorage <> 'x' AND c.oid NOT IN (SELECT parchildrelid FROM pg_partition_rule)
+            UNION ALL
+        SELECT n.nspname||'.'||c.relname relname, age(relfrozenxid) age, n.nspname nsp, relnamespace nspid FROM gp_dist_random('pg_class') c, pg_namespace n
+        WHERE c.relnamespace=n.oid AND c.relkind = 'r' AND c.relstorage <> 'x'  AND c.oid NOT IN (SELECT parchildrelid FROM pg_partition_rule)
+    ) X WHERE nspid < 16384 AND nsp <> 'public' AND age <> 2147483647 AND age > $AGE_THRESHOLD GROUP by relname
+) Y  ORDER BY age DESC;};
+    my @table_array = queryResult("F:localhost:$database_name:$PORT",$table_sql);
+    for my $row(@table_array){
+        my ($table) = @$row;
+        my $vacuum_sql = qq{LOCK TABLE $table IN EXCLUSIVE MODE NOWAIT;VACUUM FREEZE $table;};
+        my @shared_task :shared = ("F:localhost:$database_name:$PORT",$vacuum_sql,"TABLE:$database_name.$table");
+        $TASK_QUEUE->enqueue(\@shared_task);
+    }
+    $TASK_SIZE = @table_array;
+    startProcessThread(1);
+}
+sub freezeUserTable{
+    my ($database_name,$partition_type) = @_;
+    my $partition_condition = "NOT IN";
+    if($partition_type eq "leaf"){
+        $partition_condition = "IN";
+    }
+    my $table_sql = qq{SELECT gp_toolkit.mcencode(nspname), gp_toolkit.mcencode(relname) FROM (
+    SELECT nspname, relname, max(age) age FROM (
+        SELECT n.nspname, c.relname, age(relfrozenxid) age FROM pg_class c, pg_namespace n
+        WHERE c.relnamespace=n.oid AND c.relkind = 'r' AND c.relstorage <> 'x' AND c.oid $partition_condition (SELECT parchildrelid FROM pg_partition_rule)
+            AND (n.oid >= 16384 OR n.nspname = 'public') AND age(relfrozenxid) <> 2147483647 AND age(relfrozenxid) > $AGE_THRESHOLD
+            UNION ALL
+        SELECT n.nspname, c.relname, age(relfrozenxid) age FROM gp_dist_random('pg_class') c, pg_namespace n
+        WHERE c.relnamespace=n.oid AND c.relkind = 'r' AND c.relstorage <> 'x' AND c.oid $partition_condition (SELECT parchildrelid FROM pg_partition_rule)
+            AND (n.oid >= 16384 OR n.nspname = 'public') AND age(relfrozenxid) <> 2147483647 AND age(relfrozenxid) > $AGE_THRESHOLD
+    ) X GROUP BY 1,2
+) Y  ORDER BY age DESC;};
+    checkLanguage("F:localhost:$database_name:$PORT");
+    checkEncodeFunction("F:localhost:$database_name:$PORT");
+    my @table_array = queryResult("F:localhost:$database_name:$PORT",$table_sql);
+    for my $row(@table_array){
+        my ($nspname,$relname) = @$row;
+        my $table = quote(decode($nspname)).quote(decode($relname));
+        my $vacuum_sql = qq{LOCK TABLE $table IN EXCLUSIVE MODE NOWAIT;VACUUM FREEZE $table;};
+        my @shared_task :shared = ("F:localhost:$database_name:$PORT",$vacuum_sql,"TABLE:$database_name.$table");
+        $TASK_QUEUE->enqueue(\@shared_task);
+    }
+    $TASK_SIZE = @table_array;
+    startProcessThread();
+}
+sub freezeDatabase{
+    my ($database_name,$partition_type) = @_;
+    logMessage("INFO","VACUUM FREEZE database: $database_name");
+    logMessage("INFO","Start VACUMM FREEZE DATABASE $database_name".("."x49));
+    if("template0" eq $database_name){
+        freezeTemplate0();
+    }else{
+        logMessage("INFO","Start VACUMM FREEZE catalog $database_name".("."x38));
+        freezeCatalog($database_name);
+        logMessage("INFO","Start VACUMM FREEZE user table $database_name".("."x35));
+        freezeUserTable($database_name,$partition_type);
+    }
+}
+sub freezeSystem{
+    ##Get segment configuration to Global Array @INSTANCE_INFO
+    my $instance_sql = qq{select hostname,port from gp_segment_configuration where role = 'p';};
+    @INSTANCE_INFO = queryResult("F:localhost:template1:$PORT",$instance_sql);
+    ##Get database name's max length for Print Format
+    $MAX_DATABASE_NAME_LENGTH = queryResult("F:localhost:template1:$PORT",$DATABASE_NAME_SIZE_SQL,"Scalar");
+    ##Initialize Queue
+    $TASK_QUEUE = Thread::Queue->new();
+    $MSGE_QUEUE = Thread::Queue->new();
+    ##Execute VACUMM FREEZE and check the max age of database in System
+    $CURR_BATCH_SIZE = $BATCH_SIZE;
+    ##Check the max age of database in System
+    $CURR_GLOBAL_INDEX = 0;
+    my $max_age_in_system = checkSystemAge();
+    ##Exit if the max age of database in System less than threshold
+    if($max_age_in_system < $AGE_THRESHOLD){
+        logMessage("INFO","Max database age less than threshold($AGE_THRESHOLD) value");
+        return;
+    }
+    ##Check whether continue to execute VACUMM FREEZE
+    my $input = 'Y';
+    if(!$NOT_PROMPT){
+        $input = getInput("Please input Yy/Nn to continue execute VACUUM FREEZE:","Y","y","N","n");
+    }
+    if("N" eq uc($input)){
+        logMessage("INFO","exit...");
+        exit 0;
+    }
+    for my $index (1 .. 3){
+        $CURR_GLOBAL_INDEX = $index;
+        if($CURR_GLOBAL_INDEX > 1){
+            $CURR_BATCH_SIZE = 1;
+        }
+        for my $row(@DATABASE_AGE_INFO){
+            ##Execute VACUMM FREEZE
+            my ($database_name,$age,$can_connect) = @$row;
+            freezeDatabase($database_name,"root");
+        }
+        ##Check the max age of database in System
+        my $max_age_in_system = checkSystemAge();
+        ##Try to VACUMM FREEZE partition leaf table
+        if($max_age_in_system >= $AGE_THRESHOLD){
+            logMessage("INFO","Try to VACUUM FREEZE partition table");
+            for my $row(@DATABASE_AGE_INFO){
+                ##Execute VACUMM FREEZE
+                my ($database_name,$age,$can_connect) = @$row;
+                freezeDatabase($database_name,"leaf");
+            }
+        }
+        ##Check the max age of database in System
+        $max_age_in_system = checkSystemAge();
+        ##Exit if the max age of database in System less than threshold
+        if($max_age_in_system < $AGE_THRESHOLD){
+            logMessage("INFO","Max database age less than threshold($AGE_THRESHOLD) value");
+            return;
+        }elsif($CURR_GLOBAL_INDEX < 2){
+            logMessage("INFO","Try to freeze some database again".("." x 33));
+        }
+    }
+}
+sub main{
+    getOption();
+    checkOption();
+    getKeyWord();
+    logMessage("INFO","Start gpdbcheckage process".("." x 66));
+    logMessage("INFO","Run command: ".$_[0]);
+    freezeSystem();
+}
+my $command_string = $0." ".join(" ",@ARGV);
+$| = 1;
+main($command_string);
