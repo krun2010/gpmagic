@@ -1060,7 +1060,9 @@ sub gpConfig{
         }
     }
     for my $key(keys %gp_config_hash){
-        system(qq{. /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1;gpconfig -c $key }.$gp_config_hash{$key});
+        my $gpconfig = qq{sudo su - $GP_ADMIN_NAME <<END_OF_COMMAND\n. /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1\n};
+        $gpconfig = $gpconfig.qq{gpconfig -c $key }.$gp_config_hash{$key}.qq{\nEND_OF_COMMAND};
+        system($gpconfig);
     }
 }
 sub main{
