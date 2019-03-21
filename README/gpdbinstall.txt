@@ -1,1 +1,71 @@
 
+
+自动安装部署命令
+使用说明
+
+作者:
+陈淼
+
+日期:
+2019-03-21
+
+命令介绍
+命令名称:
+gpdbinstall
+命令适用场景:
+用于一键式安装部署Greenplum集群，目前支持较新的4.3版本和5版本，命令会根据配置文件和参数，自动完成如下任务：
+1、主机名配置和hosts文件配置，操作系统参数修改，关闭防火墙和SELinux等
+2、完成数据库执行文件的安装和分发
+3、根据配置定义，完成数据库的初始化和镜像添加等
+在命令执行完成之后，如果配置无误，命令成功执行，将完成数据库的安装配置和初始化，用户可以开始使用数据库。
+
+命令运行环境要求:
+1、RAID已经配置好，机器操作系统已经安装完成，IP地址已经配好，网络已经连通.
+2、具备perl语言环境和expect命令，如果环境不满足，命令运行会直接报错退出.
+3、所有相关主机具备安装部署Greenplum的必要条件，比如，如下必须具备的命令：
+ip，sed,zip,unzip,less,bash,tar,perl,expect,ssh,ifconfig,mkfs.xfs
+在命令运行开始时，会自动检测所有主机是否符合Greenplum运行要求，如果不满足，会提示不满足的信息并报错退出
+
+限制：
+目前，命令不能自动完成环境的性能检测，因为无法获取硬件信息，无法得到性能的参考基准，需要安装数据库之后自行评估。
+
+命令部署：
+将gpdbinstall文件放置在作为Master的主机上(必须在Master上执行，否则会报错)，并将执行权限修改为755。文件为平面文本，在不具备文件传输的环境中，可以直接将内容复制粘帖。
+
+所需介质：
+greenplum-db-{VERSION}-rhelX-x86_64.zip
+注意，不要随意修改安装包的版本号信息，否则，安装包的版本信息与解压到/usr/local的版本号信息不一致可能会导致安装失败.
+
+命令用法:
+gpdbinstall --hosts-config <filename>
+    [--password <current user password>]
+    [--gp-admin-name <gp admin user name>]
+    [--gp-admin-passwd <gp admin user passwd>]
+    --install-file <greenplum binary file>
+    --gp-version <greenplum version>
+    --mas-dev <device or directory for master>
+    --seg-dev <device or directory for segment> [--seg-dev <device or directory for segment> ...]
+    [--user-id <gp admin user id>]
+    [--segs-per-disk <instance amount on one device or directory>]
+    [--prefix <instance directory name prefix>]
+    [--mas-port <master work port>]
+    [--port-base <primary instance port base>]
+    [--mirror-split <amount of machine which mirror split to>]
+    [--ignore-init]
+    [--expand]
+    [--gpconfig <gpconfig parameter and value> [--gpconfig <gpconfig parameter and value>] ...]
+    [--verbose | -v]
+    [--parameter-file | --pf <parameter file>]
+    [-h | --help]
+    
+    
+
+
+
+
+
+
+
+
+
+
