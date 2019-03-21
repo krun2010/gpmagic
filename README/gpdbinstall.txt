@@ -58,14 +58,175 @@ gpdbinstall --hosts-config <filename>
     [--parameter-file | --pf <parameter file>]
     [-h | --help]
     
-    
+参数说明
 
+--hosts-config <filename>
+必选参数，集群内机器的信息配置文件，该文件的内容格式样例如下：
+#IP address      hostname    role     position
+  192.168.88.10 : mdw001  :  Master  :   0.1
+  192.168.88.11 : mdw002  :  Standby :   0.2
+  192.168.88.80 : sdw001  :  Segment :   1.1
+  192.168.88.81 : sdw002  :  Segment :   1.2
+  192.168.88.82 : sdw003  :  Segment :   1.3
+  192.168.88.83 : sdw004  :  Segment :   2.1
+  192.168.88.84 : sdw005  :  Segment :   2.2
+  192.168.88.85 : sdw006  :  Segment :   2.3
+  192.168.88.86 : sdw007  :  Segment :   3.1
+  192.168.88.87 : sdw008  :  Segment :   3.2
+  192.168.88.88 : sdw009  :  Segment :   3.3
+  192.168.88.89 : sdw010  :  Backup  :   0.0
+每一行是一个机器的配置信息，第一个属性是机器的IP地址，第二个属性是机器将被设置的主机名，
+第三个属性是机器的角色，第四个属性是机器所在位置.
 
+Master可以和某个Segment相同，Standby也可以和某个Segment相同，但是，Standby不可以和Master相同.
+如果Standby和Master的IP相同，Standby将被置为无效.
+如果Master或者Standby和Segment相同，将只使用Segment的主机名.
 
+角色，除了Master，Standby和Segment外，都将被作为Segment的冷备机器进行配置，
+但其不会被初始化进入GP集群，其将会被配置成为随时可以替换Segment的机器.
+这对于规模较大且规划了冷备节点的情况将十分有用.角色名称不区分大小写，可以使用没有歧义的缩写，
+命令把以m开头的识别为Master，以st开头的识别为Standby，以se开头的识别为Segment，
+Master和Standby有多余1个的配置时，除了第一个外，其余的将作为备用机器进行配置.
 
+机器位置需要使用一个浮点数来标记，整数部分决定该机器属于第几个镜像环，小数部分决定该机器在镜像环内的位置.
+对于Master来说，这个属性没有什么实际意义，可以提供一个没有意义的数字，比如0.0，而对于计算节点来说，意义重大，
+其决定了集群内机器之间的镜像关系.
+比如，示例中，1.1、1.2、1.3会组成一个镜像环.
+如果--mirror-split参数为1，那么镜像关系将依次是：
+1.1 -> 1.2、1.2 -> 1.3、1.3 -> 1.1
+如果--mirror-split参数为2，那么镜像关系将依次是：
+1.1 -> 1.2 & 1.3、1.2 -> 1.3 & 1.1、1.3 -> 1.1 & 1.2
+如果--mirror-split参数为3，那么，3个机器组成的镜像环违反镜像逻辑，命令会直接报错退出.
+如果不希望配置镜像，可以将参数--mirror-split指定为0，这样，命令将会自动忽略镜像配置.
 
+--password <password>
+当前安装用户的密码，必须确保当前进行安装的用户在集群内所有机器的密码是相同的，
+否则，命令会自动检测到密码错误并报错退出.
+当前用户如果不是root，则必须在所有机器上具备免密sudo权限，否则命令会自动检测到该问题并报错退出.
+如果未提供该参数，在命令开始时会交互式提示输入该参数的值.
 
+--gp-admin-name <user name>
+指定Greenplum数据库第一个管理员对应的OS用户名称， 如果安装用户是root，则缺省值为gpadmin，
+如果安装用户不是root，则缺省值为当前执行安装的用户.
+不过，一般都是建议使用gpadmin这个用户名作为OS用户.
+如果该用户在操作系统中不存在，命令会自动创建该用户.
+如果，用户创建失败，命令不会报错，但后续监测用户名是否存在时，如果该用户名不存在，命令会报错退出.
 
+--gp-admin-passwd <gp admin user passwd>
+执行Greenplum数据库对用的OS用户的密码，缺省与用户名相同，但对于有高级密码要求的系统来说，
+可能非常需要使用这个参数来解决密码强度不足导致的报错.
 
+--install-file <greenplum binary file>
 
+Greenplum数据库的二进制安装文件，文件实体请联系Pivotal获取.
+可以使用未解压.zip文件或者解压后的.bin文件，其他文件不予识别，会直接报错退出.
+命令会将安装目录固定为/usr/local
+如果在/usr/local目录下发现同版本的Greenplum安装目录，则不会继续进行安装包的安装.
+如果你确实需要完全重新安装，建议先行删除已有的安装目录.
 
+--gp-version <greenplum version>
+
+执行已经安装的版本进行安装部署，如果指定了该参数，又没有找到/usr/local/greenplum-db-${version}目录，
+命令会直接报错退出.
+
+--mas-dev <device or directory for master>
+
+Master工作目录，可以是一个已经存在的目录，比如：
+/data
+或者一个未使用的裸设备，比如：
+/dev/sdc等，
+如果两者都不是，命令会报错退出.
+如果是裸设备，命令会自动进行xfs格式化及挂载，并完成后续操作.
+
+--seg-dev <device or directory for segment> [--seg-dev <device or directory for segment> ...]
+该参数可以多次指定，适用单个计算节点有多个数据存储设备的场景.
+Segment工作目录，可以是一个已经存在的目录，比如：
+/data1
+或者一个未使用的裸设备，比如：
+/dev/sdc等，
+如果两者都不是，命令会报错退出.
+如果是裸设备，命令会自动进行xfs格式化及挂载，并完成后续操作.
+
+[--user-id <gp admin user id>]
+为greenplum对应的OS用户指定userid，这主要对一些可能用到共享存储权限管理的场景，缺省值为500，
+对于在用操作系统，请指定一个不存在的userid，否则，安装将会遭遇一场并报错退出.
+
+[--segs-per-disk <number>]
+
+每个设备或者目录下初始化多少个Primary实例，缺省值为2，
+其与--seg-dev参数的个数配合确定每个Segment配置多少个Primary实例.
+
+[--prefix <prefix>]
+Greenplum实例工作目录名称的前缀，缺省为gpseg，除非要在一个系统初始化多个集群，否则，永远不需要用到这个参数.
+
+[--mas-port <master work port>]
+Master管理节点工作所在的端口号，缺省是5432，客户端访问数据库时将通过这个端口进行访问，通常，请使用缺省值.
+
+[--port-base <port base>]
+Primary实例端口的基础值，缺省为40000，对于每台机器来说，如果有4个Primary实例，其将占用40000 ~ 40003共4个端口，
+同样的，Primary的同步端口将是41000 ~ 41003，
+Mirror的服务端口将是50000 ~ 50003，Mirror的同步端口将是51000 ~ 51003.
+为了便于参数提供，Primary同步端口等选择了固定的偏移量，不过，这个对集群使用没有任何影响.
+
+[--mirror-split <number>]
+镜像将被分散到几个机器上去，缺省是2，这意味着，同一个机器上的多个Primary会被分散到多个机器上去，
+如果是2个，当有一个机器故障时，其任务将有2个机器接管.
+目前广泛使用的是分散到2个机器上去，命令会根据position信息去建立镜像环，
+如果条件允许，应尽可能让同一个镜像环的机器来自不同机柜，这样将可以允许单个机柜整体掉电.
+
+[--ignore-init]
+忽略集群的初始化操作，这主要用于临时安装备用机器，主要用于对机器进行配置修改和Greenplum软件安装.
+
+[--expand]
+为已有集群做扩容准备工作，包括：
+新机器的Greenplum软件安装部署，操作系统参数修改，原有机器的调整，重新的密钥交换等.
+命令成功运行后会在/tmp目录下生成2个扩容配置文件:
+gpexpand_inputfile_YYYYddmm_HHMMSS
+和
+gpexpand_inputfile_YYYYddmm_HHMMSS.fs
+如果原有系统不是由gpdbinstall安装，请确认生成的配置文件是否需要适当的调整.
+不过，自动生成的扩容配置文件已经包含了根据--hosts-config中指定的镜像关系.
+经过确认文件内容后，运行gpexpand命令进行扩容即可.
+
+[--gpconfig <parameter and value> [--gpconfig <parameter and value>] ...]
+执行数据库初始化成功后需要进行的参数配置，比如：
+--gpconfig "gp_workfile_compress_algorithm = -v zlib"
+如果在--parameter-file中指定则不需要额外的引号包裹，缺省包含了如下的参数：
+
+    gp_vmem_protect_limit                       #根据实际计算，但不小于8192
+    max_appendonly_tables                       -v 50000 -m 50000
+    gp_max_partition_level                      -v 1 -m 1
+    log_min_duration_statement                  -v 30000 -m 30000
+    gp_workfile_limit_per_query                 -v 134217728 -m 134217728
+    gp_enable_relsize_collection                -v on -m on
+    gp_workfile_limit_per_segment               -v 134217728 -m 134217728
+    gp_max_local_distributed_cache              -v 1048576
+    gp_workfile_compress_algorithm              -v zlib
+    gp_autostats_mode_in_functions              -v ON_NO_STATS -m ON_NO_STATS
+    writable_external_table_bufsize             -v 16MB -m 16MB
+    gp_create_table_random_default_distribution -v on -m on
+
+[--parameter-file | --pf <parameter file>]
+将参数放到一个文件中来指定，这样可以更简便和通用化，参数采用key = value的方式指定，
+命令会自动对key和value两端的空格进行trim，同时，以井号(#)开头的行将被作为注释忽略，比如：
+  hosts-config    = hosts-config
+  gp-admin-name   = gpadmin
+  gp-admin-passwd = gpadminpasswd
+  install-file    = greenplum-db-5.9.0-rhel7-x86_64.zip
+  mas-dev         = /data
+  seg-dev         = /data1
+  seg-dev         = /data2
+  user-id         = 500
+  segs-per-disk   = 2
+  prefix          = gpseg
+  mas-port        = 5432
+  port-base       = 40000
+  mirror-split    = 2
+  gpconfig        = gp_workfile_compress_algorithm = -v zlib
+  verbose
+
+[--verbose | -v]  
+更详细的打印日志信息，往往用于排查报错信息. 
+
+[-h | --help]
+查看在线帮助信息.
