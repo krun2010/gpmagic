@@ -1175,7 +1175,7 @@ sub createExpandFile{
         return;
     }
     my $primary_dbid_index = $MAX_DBID + 1;
-    my $mirror_dbid_index = $MAX_DBID + @SEG_INSTALL_CONFIG_ARRAY * @SEGMENT_DEV * $SEGS_PER_DISK;
+    my $mirror_dbid_index = $MAX_DBID + @SEG_INSTALL_CONFIG_ARRAY * @SEGMENT_DEV * $SEGS_PER_DISK + 1;
     my $content_index = $MAX_CONTENT + 1;
     my (@node_array,@primary_config,@mirror_config,@primary_filespace,@mirror_filespace);
     my $index = 0;
