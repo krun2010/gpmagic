@@ -737,7 +737,7 @@ sub modifySystemConfig{
         }
         print $file_handle "$ip = $hostname\n";
     }
-    print $file_handle q#'|awk -F ' = ' '{system("sed -e /^"$1"[[:space:]]/d -i /etc/hosts;echo "$1"\\\\\\x09"$2" >> /etc/hosts")}'#."\n";
+    print $file_handle q#'|awk -F ' = ' '{system("sed -e /^"$1"[[:space:]]/d -e /[[:space:]]"$2"[[:space:]]/d -e /[[:space:]]"$2"$/d -i /etc/hosts;echo "$1"\\\\\\x09"$2" >> /etc/hosts")}'#."\n";
     print $file_handle "##################################################################################\n";
     close $file_handle;
     my ($master_path,$segment_path);
@@ -846,6 +846,7 @@ sub installBinary{
             if($INSTALL_FILE !~ /\.bin$/){
                 errorMessage("Unidentified file format:\n".$INSTALL_FILE);
             }
+            system(qq{if [ -f /etc/cgsl-release ];then sudo touch /etc/redhat-release;fi});
             my $command = qq{sudo bash $INSTALL_FILE};
             executeWithExpect($command,0,([["license agreement","q"]]),([["yes|no","yes"]]),([["installation path",""]]),([["yes|no","yes",1],["*#"]]));
             logMessage("INFO","Try to get install path");
@@ -866,6 +867,8 @@ sub installBinary{
     if($INSTALL_VERSION eq ""){
         errorMessage("Install greenplum software failed ...");
     }
+    system(qq{sudo sed 's/^\\s*MASTER_IPV6_LOCAL_ADDRESS_ALL.*/                MASTER_IPV6_LOCAL_ADDRESS_ALL=(::1)/' -i /usr/local/greenplum-db-$INSTALL_VERSION/bin/gpinitsystem});
+    system(qq{sudo sed 's/^\\s*SEGMENT_IPV6_LOCAL_ADDRESS_ALL.*/        SEGMENT_IPV6_LOCAL_ADDRESS_ALL=(::1)/' -i /usr/local/greenplum-db-$INSTALL_VERSION/bin/lib/gpcreateseg.sh});
     logMessage("INFO","Install path is:\n"."/usr/local/greenplum-db-$INSTALL_VERSION");
     my $output = readpipe(qq{cd /usr/local/;sudo tar -cf /tmp/greenplum-db.install.tmp.tar greenplum-db-$INSTALL_VERSION;sudo chown $CURRENT_USER_NAME. /tmp/greenplum-db.install.tmp.tar});
     my @thread_array = ();
@@ -1140,7 +1143,10 @@ sub gpConfig{
         my ($mas_value,$seg_value);
         my $pri_count = @SEGMENT_DEV * $SEGS_PER_DISK;
         my $master_mem = trim(readpipe(q#free -g|grep Mem|awk '{print $2}'#));
-        my @segment_mem = readpipe(q#gpssh -f #.qq#$WORK_PATH"/all_segs_install"#.q# -e 'free -g'|grep Mem|awk '{print $3}'|sort -n|uniq#);
+        my $gpssh_command = qq{sudo su - $GP_ADMIN_NAME <<END_OF_COMMAND}.q#|grep Mem|awk '{print $3}'|sort -n|uniq#;
+        $gpssh_command = $gpssh_command.qq{\n. /usr/local/greenplum-db/greenplum_path.sh > /dev/null 2>&1\n};
+        $gpssh_command = $gpssh_command.q#gpssh -f #.qq#$WORK_PATH"/all_segs_install"#.q# -e 'free -g'#.qq{\nEND_OF_COMMAND};
+        my @segment_mem = readpipe($gpssh_command);
         if(@segment_mem > 1){
             logMessage("WARN","All segment hosts's memery not consistent, will use the smallest to config gp_vmem_protect_limit");
         }
@@ -1365,18 +1371,18 @@ if [ -f /etc/HOSTNAME ];then
 fi
 ##################################################################################
 sed -e s/^ulimit/#ulimit/ -i /etc/profile                                         > /dev/null 2>&1
-sed -e /^[^#]/d -e /^[:space:]*$/d -i /etc/security/limits.conf
-echo ''                            >> /etc/security/limits.conf
-echo '* soft nofile 1048576'       >> /etc/security/limits.conf
-echo '* hard nofile 1048576'       >> /etc/security/limits.conf
-echo '* soft nproc  1048576'       >> /etc/security/limits.conf
-echo '* hard nproc  1048576'       >> /etc/security/limits.conf
+sed -e /^[^#]/d -e /^[[:space:]]*$/d -i /etc/security/limits.conf
+echo ''                              >> /etc/security/limits.conf
+echo '* soft nofile 1048576'         >> /etc/security/limits.conf
+echo '* hard nofile 1048576'         >> /etc/security/limits.conf
+echo '* soft nproc  1048576'         >> /etc/security/limits.conf
+echo '* hard nproc  1048576'         >> /etc/security/limits.conf
 nprocname="/etc/security/limits.d/90-nproc.conf"
 if [ -f "/etc/security/limits.d/20-nproc.conf" ];then
     nprocname="/etc/security/limits.d/20-nproc.conf"
 fi
 if [ -f $nprocname ];then
-    sed -e /^[^#]/d -e /^[:space:]*$/d -i            $nprocname
+    sed -e /^[^#]/d -e /^[[:space:]]*$/d -i          $nprocname
     echo ''                                       >> $nprocname
     echo '*          soft    nproc     unlimited' >> $nprocname
     echo 'root       soft    nproc     unlimited' >> $nprocname
@@ -1419,7 +1425,7 @@ if [ -f "/etc/init.d/boot.local" ];then
     localfile="/etc/init.d/boot.local"
 fi
 chmod +x $localfile
-sed -e /^[^#]/d -e /^[:space:]*$/d -i $localfile
+sed -e /^[^#]/d -e /^[[:space:]]*$/d -i $localfile
 echo ''                                                                   >> $localfile
 echo 'touch /var/lock/subsys/local'                                       >> $localfile
 echo 'blockdev --setra 16384 /dev/sd*'                                    >> $localfile
