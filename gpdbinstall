@@ -836,7 +836,7 @@ sub installBinary{
         }
         if($INSTALL_VERSION eq ""){
             if($INSTALL_FILE =~ /\.zip$/){
-                my $output = trim(readpipe(qq(sudo unzip -o $INSTALL_FILE -d $WORK_PATH/|grep inflating|awk '{print \$2}')));
+                my $output = trim(readpipe(qq(sudo unzip -o $INSTALL_FILE -d $WORK_PATH/|grep inflating|sed 's/\\s//g'|grep '.bin\$'|awk -F ':' '{print \$2}')));
                 if(-f $output && $output =~ /\.bin$/){
                     $INSTALL_FILE = $output;
                 }else{
