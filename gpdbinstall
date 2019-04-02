@@ -737,7 +737,7 @@ sub modifySystemConfig{
         }
         print $file_handle "$ip = $hostname\n";
     }
-    print $file_handle q#'|awk -F ' = ' '{system("sed -e /^"$1"[[:space:]]/d -e /[[:space:]]"$2"[[:space:]]/d -e /[[:space:]]"$2"$/d -i /etc/hosts;echo "$1"\\\\\\x09"$2" >> /etc/hosts")}'#."\n";
+    print $file_handle q#'|awk -F ' = ' '{system("sed -e /^"$1"[[:space:]]/d -e '\''/[[:space:]]"$2"[[:space:]]/d'\'' -e '\''/[[:space:]]"$2"$/d'\'' -i /etc/hosts;echo '\''"$1"    "$2"'\'' >> /etc/hosts")}'#."\n";
     print $file_handle "##################################################################################\n";
     close $file_handle;
     my ($master_path,$segment_path);
