@@ -10,7 +10,7 @@ use POSIX;
 
 my ($SRC_HOST,$SRC_PORT,$SRC_USER,$SRC_PASSWD,$SRC_DATABASE,$DEST_HOST,$DEST_PORT,$DEST_USER,$DEST_PASSWD,$DEST_DATABASE,
     $KEY,$SRC_MAPFILE,$BY_LEAF,$FORCE,$FORCE_OWNER,$MASTER_ONLY,@TABLE_ARRAY,@EX_TABLE_ARRAY,$TABLE_FILE,$EX_TABLE_FILE,@SCHEMA_ARRAY,@EX_SCHEMA_ARRAY,
-    $INCREMENT,$IGNORE_CHECK,$NEED_DELETE,$NEED_TRUNCATE,$NEED_ANALYZE,$ENCODING,$BATCH_SIZE,$COMPRESS,$GLOBAL_CONDITION,$LOG_PATH,$PARAMETER_FILE,$IS_HELP,$VERSION);
+    $INCREMENT,$IGNORE_CHECK,$IGNORE_HBA,$NEED_DELETE,$NEED_TRUNCATE,$NEED_ANALYZE,$ENCODING,$BATCH_SIZE,$COMPRESS,$GLOBAL_CONDITION,$LOG_PATH,$PARAMETER_FILE,$IS_HELP,$VERSION);
 my (%SRC_HOSTMAP,$TASK_QUEUE,$MSG_QUEUE,$LOG_FILE_HANDLE);
 my ($BATCH_MAX,$BATCH_DEFAULT,$BATCH_MIN,$SQL_BATCH) = (20,6,1,300);
 my ($KEY_DEFAULT) = (20140825);
@@ -230,7 +230,7 @@ LCNTT=$(((LCNTT+SEED)%SIZE))
 if [[ "TEST" == "$WHERE" && $COMP == 1 ]];then
     for RIP in `cat $KEY.info|awk -F ',' '{print \\$2}'|sort|uniq`;do
         MSG=`timeout -s 9 7 ssh $USER@$RIP -T "echo 1"`
-        ERR=$?;if [[ $ERR -ne 0 || $MSG -ne 1 ]];then echo $MSG >&2;exit 2;fi
+        ERR=$?;if [[ $ERR -ne 0 || $MSG -ne 1 ]];then exit 2;fi
     done
 fi
 if [ "M" == "$TYPE" ];then
@@ -269,7 +269,7 @@ else
         RPORT=${RARRAY[2]}
         if [ "TEST" == "$WHERE" ];then
             CCNTT=`PGOPTIONS='-c gp_session_role=utility' PGUSER=$USER psql -qtAX -h $RIP -p $RPORT -d $DBNM -c "show gp_contentid"`
-            if [ $CCNTT != $RCNTT ];then exit 1;fi
+            ERR=$?;if [[ $ERR -ne 0 || "$CCNTT" != "$RCNTT" ]];then exit 1;fi
         else
             if [ $COMP == 0 ];then
 ps ax|grep -w 'psql'|grep -w "GPDBTRANSFER.$KEY.$INDX.$LPORT"|awk '{if($1!='$$'){system("kill -9 "$1)}}' >/dev/null 2>&1
@@ -335,6 +335,7 @@ $CMD_NAME --src-host hostname
     [-S <schema> [-S <schema>] ...]
     [--increment]
     [--ignore-check]
+    [--ignore-hba]
     [--delete]
     [--truncate]
     [--analyze]
@@ -554,6 +555,12 @@ OPTIONS
   It is very usefull for cluster migration to improve performance, if tow cluster have the same ddl and does not need to check.
   Especially for those cluster have catalog performance issue.
   If specify this parameter, --force parameter will not work, only use this parameter for migration between same ddl cluster.
+
+--ignore-hba
+
+  Transfer will ignore pg_hba.conf modification.
+  But, you should make sure all the destination instance can access all the source instance with psql without password.
+  Just use this parameter while you want control the pg_hba.conf configuration by yourself.
 
 --delete
 
@@ -775,16 +782,16 @@ sub queryResult{
 }
 sub getOption{
     GetOptions(
-        'src-host:s'       => \$SRC_HOST,       'src-port:i'    => \$SRC_PORT,     'src-user:s'  => \$SRC_USER,    'src-passwd:s'   => \$SRC_PASSWD,       'src-database:s'  => \$SRC_DATABASE,
-        'dest-host:s'      => \$DEST_HOST,      'dest-port:i'   => \$DEST_PORT,    'dest-user:s' => \$DEST_USER,   'dest-passwd:s'  => \$DEST_PASSWD,      'dest-database:s' => \$DEST_DATABASE,
-        'key:i'            => \$KEY,            'src-mapfile:s' => \$SRC_MAPFILE,  'by-leaf!'    => \$BY_LEAF,     'force!'         => \$FORCE,            'owner'           => \$FORCE_OWNER,
-        'from-master!'     => \$MASTER_ONLY,
-        't:s'              => \@TABLE_ARRAY,    'T:s'           => \@EX_TABLE_ARRAY,
-        'f:s'              => \$TABLE_FILE,     'F:s'           => \$EX_TABLE_FILE,
-        's:s'              => \@SCHEMA_ARRAY,   'S:s'           => \@EX_SCHEMA_ARRAY,
-        'increment!'       => \$INCREMENT,      'ignore-check!' => \$IGNORE_CHECK,  'delete!'    => \$NEED_DELETE, 'truncate!'      => \$NEED_TRUNCATE,    'analyze!'        => \$NEED_ANALYZE,
-        'encoding:s'       => \$ENCODING,       'B:i'           => \$BATCH_SIZE,    'compress!'  => \$COMPRESS,    'where:s'        => \$GLOBAL_CONDITION, 'log-path:s'      => \$LOG_PATH,
-        'parameter-file:s' => \$PARAMETER_FILE, 'h|help!'       => \$IS_HELP,       'version!'   => \$VERSION,
+        'src-host:s'   => \$SRC_HOST,     'src-port:i'       => \$SRC_PORT,       'src-user:s'  => \$SRC_USER,   'src-passwd:s'  => \$SRC_PASSWD,  'src-database:s'  => \$SRC_DATABASE,
+        'dest-host:s'  => \$DEST_HOST,    'dest-port:i'      => \$DEST_PORT,      'dest-user:s' => \$DEST_USER,  'dest-passwd:s' => \$DEST_PASSWD, 'dest-database:s' => \$DEST_DATABASE,
+        'key:i'        => \$KEY,          'src-mapfile:s'    => \$SRC_MAPFILE,    'by-leaf!'    => \$BY_LEAF,    'force!'        => \$FORCE,       'owner'           => \$FORCE_OWNER,
+        'from-master!' => \$MASTER_ONLY,
+        't:s'          => \@TABLE_ARRAY,  'T:s'              => \@EX_TABLE_ARRAY,
+        'f:s'          => \$TABLE_FILE,   'F:s'              => \$EX_TABLE_FILE,
+        's:s'          => \@SCHEMA_ARRAY, 'S:s'              => \@EX_SCHEMA_ARRAY,
+        'increment!'   => \$INCREMENT,    'ignore-check!'    => \$IGNORE_CHECK,   'ignore_hba'  => \$IGNORE_HBA, 'delete!'       => \$NEED_DELETE,  'truncate!'      => \$NEED_TRUNCATE,
+        'analyze!'     => \$NEED_ANALYZE, 'encoding:s'       => \$ENCODING,       'B:i'         => \$BATCH_SIZE, 'compress!'     => \$COMPRESS,     'where:s'        => \$GLOBAL_CONDITION,
+        'log-path:s'   => \$LOG_PATH,     'parameter-file:s' => \$PARAMETER_FILE, 'h|help!'     => \$IS_HELP,    'version!'      => \$VERSION,
     );
     if(@ARGV != 0){
         errorMessage("Some parameters unknown: [@ARGV]\nPlease refer to $CMD_NAME --help");
@@ -826,6 +833,7 @@ sub getOption{
             if("S"             eq $para                            ){push @EX_SCHEMA_ARRAY ,$val;}
             if("increment"     eq $para && "" eq $INCREMENT        ){$INCREMENT            =1   ;}
             if("ignore-check"  eq $para && "" eq $IGNORE_CHECK     ){$IGNORE_CHECK         =1   ;}
+            if("ignore-hba"    eq $para && "" eq $IGNORE_HBA       ){$IGNORE_HBA           =1   ;}
             if("delete"        eq $para && "" eq $NEED_DELETE      ){$NEED_DELETE          =1   ;}
             if("truncate"      eq $para && "" eq $NEED_TRUNCATE    ){$NEED_TRUNCATE        =1   ;}
             if("analyze"       eq $para && "" eq $NEED_ANALYZE     ){$NEED_ANALYZE         =1   ;}
@@ -920,7 +928,7 @@ sub checkOption{
     logMessage("INFO","Option values: -t ".join(' -t ',@TABLE_ARRAY)." -T ".join(' -T ',@EX_TABLE_ARRAY));
     logMessage("INFO","Option values: -f $TABLE_FILE -F $EX_TABLE_FILE");
     logMessage("INFO","Option values: -s ".join(' -s ',@SCHEMA_ARRAY)." -S ".join(' -S ',@EX_SCHEMA_ARRAY));
-    logMessage("INFO","Option values: --increment $INCREMENT --ignore-check $IGNORE_CHECK --delete $NEED_DELETE --truncate $NEED_TRUNCATE --analyze $NEED_ANALYZE --encoding $ENCODING -B $BATCH_SIZE");
+    logMessage("INFO","Option values: --increment $INCREMENT --ignore-check $IGNORE_CHECK --ignore-hba $IGNORE_HBA --delete $NEED_DELETE --truncate $NEED_TRUNCATE --analyze $NEED_ANALYZE --encoding $ENCODING -B $BATCH_SIZE");
     logMessage("INFO","Option values: --compress $COMPRESS --where $GLOBAL_CONDITION --log-path $LOG_PATH --parameter-file $PARAMETER_FILE");
     for my $ref((\$SRC_USER,\$SRC_PASSWD,\$DEST_USER,\$DEST_PASSWD)){
         if(uc($$ref) =~ /^BASE64/){
@@ -987,6 +995,10 @@ sub checkSrcCluster{
     $SRC_GPHOME = encode($SRC_GPHOME);
 }
 sub checkSrcSegHba{
+    if($IGNORE_HBA){
+        logMessage("INFO","Ignore check SRC segment pg_hba.conf");
+        return;
+    }
     logMessage("INFO","Check SRC segment pg_hba.conf");
     my $str_base64 = encode_base64($STR_SEG_PG_HBA);
     my $str_md5 = trim(readpipe(qq{echo "$str_base64"|base64 -di|md5sum|cut -c 1-32}));
