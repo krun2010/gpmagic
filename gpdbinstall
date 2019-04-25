@@ -1157,7 +1157,7 @@ sub gpConfig{
             $seg_value = int($mas_value / 2);
         }else{
             $mas_value = int($master_mem / 2);
-            $seg_value = int($seg_value * 0.9 * $pri_count);
+            $seg_value = int($seg_value * 0.9 / $pri_count);
         }
         $mas_value = $mas_value < 8 ? 8192 : $mas_value * 1024;
         $seg_value = $seg_value < 8 ? 8192 : $seg_value * 1024;
