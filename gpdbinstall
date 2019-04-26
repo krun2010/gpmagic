@@ -1133,7 +1133,7 @@ sub gpConfig{
     }
     my %gp_config_hash = ();
     for my $config(@GP_CONFIG){
-        my ($name,$value) = split("=",2);
+        my ($name,$value) = split(/=/,$config,2);
         ($name,$value) = (lc(trim($name)),trim($value));
         if(! exists $gp_config_hash{$name}){
             $gp_config_hash{$name} = $value;
