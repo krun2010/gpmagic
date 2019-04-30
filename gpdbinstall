@@ -33,6 +33,9 @@ my %DEFAULT_GPCONFIG = (
         "gp_autostats_mode_in_functions"              => "-v ON_NO_STATS -m ON_NO_STATS",
         "writable_external_table_bufsize"             => "-v 16MB -m 16MB",
         "gp_create_table_random_default_distribution" => "-v on -m on",
+        "max_fsm_pages"                               => "-v 2000000 -m 2000000",
+        "max_fsm_relations"                           => "-v 30000 -m 30000",
+        "log_timezone"                                => "-v HONGKONG -m HONGKONG",
 );
 my ($COMMAND_FILE_NAME) = ($WORK_PATH."/install_command.sh");
 my ($ssh) = ("ssh -o NumberOfPasswordPrompts=1");
@@ -83,18 +86,18 @@ OPTIONS
 
   A file contains machine configure like:
   IP address      hostname    role     position
-  192.168.88.10 : mdw001  :  Master  :   0.1
-  192.168.88.11 : mdw002  :  Standby :   0.2
-  192.168.88.80 : sdw001  :  Segment :   1.1
-  192.168.88.81 : sdw002  :  Segment :   1.2
-  192.168.88.82 : sdw003  :  Segment :   1.3
-  192.168.88.83 : sdw004  :  Segment :   2.1
-  192.168.88.84 : sdw005  :  Segment :   2.2
-  192.168.88.85 : sdw006  :  Segment :   2.3
-  192.168.88.86 : sdw007  :  Segment :   3.1
-  192.168.88.87 : sdw008  :  Segment :   3.2
-  192.168.88.88 : sdw009  :  Segment :   3.3
-  192.168.88.89 : sdw010  :  Backup  :   0.0
+  192.168.88.10 : mdw001  :  Master  :   0.01
+  192.168.88.11 : mdw002  :  Standby :   0.02
+  192.168.88.80 : sdw001  :  Segment :   1.01
+  192.168.88.81 : sdw002  :  Segment :   1.02
+  192.168.88.82 : sdw003  :  Segment :   1.03
+  192.168.88.83 : sdw004  :  Segment :   2.11
+  192.168.88.84 : sdw005  :  Segment :   2.12
+  192.168.88.85 : sdw006  :  Segment :   2.13
+  192.168.88.86 : sdw007  :  Segment :   3.001
+  192.168.88.87 : sdw008  :  Segment :   3.012
+  192.168.88.88 : sdw009  :  Segment :   3.123
+  192.168.88.89 : sdw010  :  Backup  :   0.00
 
   One line have 4 attribute and meaning:
   IP Address      hostname   role        position
