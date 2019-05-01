@@ -909,7 +909,7 @@ sub outputSequence{
         output(qq{ALTER TABLE $relnamespace.$relname OWNER TO $relowner;});
         if("" ne $relacl){
             for my $option(split(/,/,$relacl)){
-                my ($role,$value) = split(/=/,$option,2);
+                my ($role,$value) = split(/:/,$option,2);
                 ($role,$value) = (decode($role),decode($value));
                 if("" eq $role){
                     next;
@@ -993,11 +993,15 @@ sub getNextLevelPartition{
     my @partition_array;
     for my $row(@rule_array){
         my ($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def) = @$row;
+        my $parreloptions = @{$MAP_OF_TABLE{$parchildrelid}}[12];
         my $nextKey = $oid;
         my $reloptions = "";
         if($rule_def =~ /\s*WITH\s*\((.*)\)\s*/){
             $reloptions = uc($1);
             $reloptions =~ s/\s//g;
+            if($parreloptions ne "" && $parreloptions ne $reloptions){
+                $reloptions = $parreloptions;
+            }
             if($paroptions eq $reloptions){
                 $rule_def =~ s/\s*WITH\s*\((.*)\)\s*/ /;
             }else{
@@ -1026,15 +1030,19 @@ sub getPartitionTemplate{
         my @partition_array;
         for my $row(@rule_array){
             my ($oid,$parchildrelid,$parname,$parisdefault,$parruleord,$parrangestartincl,$parrangeendincl,$parrangestart,$parrangeend,$rule_def) = @$row;
+            my $parreloptions = @{$MAP_OF_TABLE{$parchildrelid}}[12];
             if($rule_def =~ /\s*WITH\s*\((.*)\)\s*/){
                 my $reloptions = uc($1);
                 $reloptions =~ s/\s//g;
+                if($parreloptions ne "" && $parreloptions ne $reloptions){
+                    $reloptions = $parreloptions;
+                }
                 $rule_def =~ s/\s*WITH\s*\(.*\)\s*/ WITH($reloptions) /;
                 $rule_def =~ s/\s+$//;
             }
             push @partition_array,$INDENT.$rule_def;
         }
-        $alter = $alter."(\n".join(",\n",@partition_array)."\n)\n;";
+        $alter = $alter."(\n".join(",\n",@partition_array)."\n)\n;\n";
     }
     return "" eq $alter ? "" : "\n".$alter;
 }
