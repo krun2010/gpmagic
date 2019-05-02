@@ -559,9 +559,7 @@ sub outputLanguage{
                 for my $option(split(/,/,$lanacl)){
                     my ($role,$value) = split(/:/,$option,2);
                     ($role,$value) = (decode($role),decode($value));
-                    if("" eq $role){
-                        next;
-                    }
+                    $role = "PUBLIC" if "" eq $role;
                     $value =~ s/\/.*$//;
                     output("GRANT USAGE ON LANGUAGE $lanname TO $role;");
                 }
@@ -602,9 +600,7 @@ sub outputSchema{
                 for my $option(split(/,/,$nspacl)){
                     my ($role,$value) = split(/:/,$option,2);
                     ($role,$value) = (decode($role),decode($value));
-                    if("" eq $role){
-                        next;
-                    }
+                    $role = "PUBLIC" if "" eq $role;
                     $value =~ s/\/.*$//;
                     output("GRANT $auth_map{$value} ON SCHEMA $nspname TO $role;");
                 }
@@ -619,7 +615,7 @@ sub getTypeInformation{
     my @result = queryResult($SQL_GET_TYPE);
     for my $row(@result){
         my ($oid,$typname,$typnamespace) = @$row;
-        ($typname,$typnamespace) = (quote(decode($typname)),$MAP_OF_SCHEMA{$typnamespace});
+        ($typname,$typnamespace) = (decode($typname),$MAP_OF_SCHEMA{$typnamespace});
         if($typnamespace eq "pg_catalog" || $typnamespace eq "information_schema"){
             $MAP_OF_TYPE{$oid} = $typname;
         }else{
@@ -757,7 +753,7 @@ sub outputDomain{
 sub getArrayFromCommaSeparatedList{
     my ($string) = @_;
     if($string eq ""){
-        return [()];
+        return ();
     }
     my @array = split(//,$string);
     my @list = ();
@@ -854,9 +850,7 @@ sub outputFunction{
             for my $option(split(/,/,$proacl)){
                 my ($role,$value) = split(/:/,$option,2);
                 ($role,$value) = (decode($role),decode($value));
-                if("" eq $role){
-                    next;
-                }
+                $role = "PUBLIC" if "" eq $role;
                 $value =~ s/\/.*$//;
                 output("GRANT EXECUTE ON FUNCTION $pronamespace.$proname($arguments) TO $role;");
             }
@@ -911,9 +905,7 @@ sub outputSequence{
             for my $option(split(/,/,$relacl)){
                 my ($role,$value) = split(/:/,$option,2);
                 ($role,$value) = (decode($role),decode($value));
-                if("" eq $role){
-                    next;
-                }
+                $role = "PUBLIC" if "" eq $role;
                 $value =~ s/\/.*$//;
                 if($role eq $relowner or $value eq "rwU"){
                     output("GRANT ALL ON SEQUENCE $relnamespace.$relname TO $role;");
@@ -1078,9 +1070,7 @@ sub getRelationAuth{
     for my $acl(split(/,/,$relacl)){
         my ($role,$value) = split(/:/,$acl,2);
         ($role,$value) = (decode($role),decode($value));
-        if("" eq $role){
-            next;
-        }
+        $role = "PUBLIC" if "" eq $role;
         $value =~ s/\/.*$//;
         if($role eq $relowner or $value eq "arwdDxt"){
             push @auth_array,"GRANT ALL ON TABLE $relnamespace.$relname TO $role;";
